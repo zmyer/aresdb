@@ -163,8 +163,8 @@ lib/libalgorithm.so: $(ALGO_OBJECT_FILES)
 	$(NVCC) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ $^ -shared -cudart=shared
 
 malloc: lib
-	$(NVCC) $(ALL_CCFLAGS) -o lib/malloc.o -c memutils/memory/malloc.c
-	$(NVCC) -shared -o lib/libmem.so lib/malloc.o
+	gcc $(CCFLAGS) -o lib/malloc.o -c memutils/memory/malloc.c
+	gcc -shared -o lib/libmem.so lib/malloc.o
 
 cuda_malloc: lib
 	$(NVCC) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o lib/cuda_malloc.o -c memutils/memory/cuda_malloc.cu

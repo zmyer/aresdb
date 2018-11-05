@@ -14,10 +14,8 @@ env:
 
 install:
   - .travis/install_golang_tools.sh
-  - .travis/install_clang_tools.sh
 
 script:
-  - make lint
   - make travis
 
 after_script:
