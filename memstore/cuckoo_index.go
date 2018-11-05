@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	defaultInitNumBuckets = 1000000
+	defaultInitNumBuckets = 1000
 	bucketSize            = 8
 	// log2(numHashes)
 	log2NumHashes = 2
