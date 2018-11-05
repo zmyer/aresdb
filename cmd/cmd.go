@@ -16,9 +16,7 @@ package cmd
 
 import (
 	"flag"
-	"fmt"
 	"net/http"
-	"net/http/pprof"
 	"path/filepath"
 	"unsafe"
 
@@ -56,7 +54,6 @@ func StartService(cfg common.AresServerConfig, logger bark.Logger, queryLogger b
 
 	// Parse command line flags with default settings from the config file.
 	port := utils.IntFlag("port", "p", utils.GetConfig().Port, "Ares service port")
-	debugPort := utils.IntFlag("debug_port", "d", utils.GetConfig().DebugPort, "Ares service debug port")
 	rootPath := utils.StringFlag("root_path", "r", utils.GetConfig().RootPath, "Root path of the data directory")
 	schedulerOff := utils.BoolFlag("scheduler_off", "so", utils.GetConfig().SchedulerOff, "Start server with scheduler off, no archiving and backfill")
 
@@ -91,35 +88,10 @@ func StartService(cfg common.AresServerConfig, logger bark.Logger, queryLogger b
 	// create enum handler
 	enumHander := api.NewEnumHandler(memStore, metaStore)
 
-	// create query hanlder.
-	queryHandler := api.NewQueryHandler(memStore, cfg.Query)
-
 	// create health check handler.
 	healthCheckHandler := api.NewHealthCheckHandler()
 
 	nodeModulesHandler := http.StripPrefix("/node_modules/", http.FileServer(http.Dir("./api/ui/node_modules/")))
-
-	// Start HTTP server for debugging.
-	go func() {
-		debugHandler := api.NewDebugHandler(memStore, metaStore, queryHandler, healthCheckHandler)
-
-		debugStaticHandler := http.StripPrefix("/static/", utils.NoCache(
-			http.FileServer(http.Dir("./api/ui/debug/"))))
-		debugRouter := mux.NewRouter()
-		debugHandler.Register(debugRouter.PathPrefix("/dbg").Subrouter())
-		schemaHandler.RegisterForDebug(debugRouter.PathPrefix("/schema").Subrouter())
-
-		debugRouter.PathPrefix("/node_modules/").Handler(nodeModulesHandler)
-		debugRouter.PathPrefix("/static/").Handler(debugStaticHandler)
-		debugRouter.HandleFunc("/debug/pprof/cmdline", http.HandlerFunc(pprof.Cmdline))
-		debugRouter.HandleFunc("/debug/pprof/profile", http.HandlerFunc(pprof.Profile))
-		debugRouter.HandleFunc("/debug/pprof/symbol", http.HandlerFunc(pprof.Symbol))
-		debugRouter.HandleFunc("/debug/pprof/trace", http.HandlerFunc(pprof.Trace))
-		debugRouter.PathPrefix("/debug/pprof/").Handler(http.HandlerFunc(pprof.Index))
-
-		utils.GetLogger().Infof("Starting HTTP server on dbg-port %d", *debugPort)
-		utils.GetLogger().Fatal(http.ListenAndServe(fmt.Sprintf(":%d", *debugPort), debugRouter))
-	}()
 
 	// Init shards.
 	utils.GetLogger().Infof("Initializing shards from local DiskStore %s", *rootPath)
@@ -134,7 +106,6 @@ func StartService(cfg common.AresServerConfig, logger bark.Logger, queryLogger b
 	schemaHandler.Register(router.PathPrefix("/schema").Subrouter(), httpWrappers...)
 	enumHander.Register(router.PathPrefix("/schema").Subrouter(), httpWrappers...)
 	dataHandler.Register(router.PathPrefix("/data").Subrouter(), httpWrappers...)
-	queryHandler.Register(router.PathPrefix("/query").Subrouter(), httpWrappers...)
 
 	swaggerHandler := http.StripPrefix("/swagger/", http.FileServer(http.Dir("./api/ui/swagger/")))
 	router.PathPrefix("/swagger/").Handler(swaggerHandler)

@@ -13,7 +13,6 @@ env:
     - GTEST_ROOT=./build/googletest
 
 install:
-  - .travis/install_cuda.sh
   - .travis/install_golang_tools.sh
   - .travis/install_clang_tools.sh
 
