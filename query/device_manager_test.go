@@ -47,7 +47,7 @@ var _ = ginkgo.Describe("device_manager", func() {
 		}
 
 		deviceManager = &DeviceManager{
-			RWMutex: &sync.RWMutex{},
+			RWMutex:            &sync.RWMutex{},
 			DeviceInfos:        deviceInfoArray,
 			Timeout:            5,
 			MaxAvailableMemory: 3000,
