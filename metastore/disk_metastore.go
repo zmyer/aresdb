@@ -808,7 +808,7 @@ func (dm *diskMetaStore) pushShardOwnershipChange(tableName string) {
 	if dm.shardOwnershipWatcher != nil {
 		dm.shardOwnershipWatcher <- common.ShardOwnership{
 			TableName: tableName,
-			Shard: 0,
+			Shard:     0,
 			ShouldOwn: true}
 		<-dm.shardOwnershipDone
 	}

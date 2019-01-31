@@ -21,10 +21,10 @@ import (
 	"strconv"
 	"time"
 
+	"encoding/json"
 	"github.com/uber/aresdb/common"
 	"github.com/uber/aresdb/memutils"
 	"github.com/uber/aresdb/utils"
-	"encoding/json"
 )
 
 const (
@@ -78,7 +78,6 @@ func (d *DeviceManager) MarshalJSON() ([]byte, error) {
 
 	return json.Marshal(JDevicemanager(*d))
 }
-
 
 // NewDeviceManager is used to init a DeviceManager.
 func NewDeviceManager(cfg common.QueryConfig) *DeviceManager {
