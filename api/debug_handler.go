@@ -625,9 +625,9 @@ func (handler *DebugHandler) ShowJobStatus(w http.ResponseWriter, r *http.Reques
 func (handler *DebugHandler) ShowDeviceStatus(w http.ResponseWriter, r *http.Request) {
 	deviceManager := handler.queryHandler.GetDeviceManager()
 	deviceManager.Lock()
-	defer deviceManager.Unlock()
-
 	jsonBuffer, err := json.Marshal(deviceManager)
+	deviceManager.Unlock()
+
 	RespondWithJSONBytes(w, jsonBuffer, err)
 	return
 }
