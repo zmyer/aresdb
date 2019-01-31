@@ -624,9 +624,7 @@ func (handler *DebugHandler) ShowJobStatus(w http.ResponseWriter, r *http.Reques
 // ShowDeviceStatus shows the current scheduler status.
 func (handler *DebugHandler) ShowDeviceStatus(w http.ResponseWriter, r *http.Request) {
 	deviceManager := handler.queryHandler.GetDeviceManager()
-	deviceManager.RLock()
-	jsonBuffer, err := json.Marshal(*deviceManager)
-	deviceManager.RUnlock()
+	jsonBuffer, err := json.Marshal(deviceManager)
 	RespondWithJSONBytes(w, jsonBuffer, err)
 	return
 }

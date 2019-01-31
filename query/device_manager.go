@@ -24,6 +24,7 @@ import (
 	"github.com/uber/aresdb/common"
 	"github.com/uber/aresdb/memutils"
 	"github.com/uber/aresdb/utils"
+	"encoding/json"
 )
 
 const (
@@ -65,6 +66,19 @@ type DeviceManager struct {
 	// device choose strategy
 	strategy deviceChooseStrategy
 }
+
+// JDevicemanager is used for safe Marshal DeviceManager
+// https://stackoverflow.com/a/18288695
+type JDevicemanager DeviceManager
+
+// MarshalJSON marshals DeviceManager
+func (d *DeviceManager) MarshalJSON() ([]byte, error) {
+	d.RLock()
+	defer d.RUnlock()
+
+	return json.Marshal(JDevicemanager(*d))
+}
+
 
 // NewDeviceManager is used to init a DeviceManager.
 func NewDeviceManager(cfg common.QueryConfig) *DeviceManager {
