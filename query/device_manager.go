@@ -21,7 +21,6 @@ import (
 	"strconv"
 	"time"
 
-	"encoding/json"
 	"github.com/uber/aresdb/common"
 	"github.com/uber/aresdb/memutils"
 	"github.com/uber/aresdb/utils"
@@ -55,7 +54,7 @@ type DeviceInfo struct {
 // 3. Assign queries to chosen device according to routing strategy specified
 type DeviceManager struct {
 	// lock to sync ops.
-	sync.RWMutex `json:"-"`
+	*sync.RWMutex `json:"-"`
 	// device to DeviceInfo map
 	DeviceInfos []*DeviceInfo `json:"deviceInfos"`
 	// default DeviceChoosingTimeout for finding a device
@@ -65,18 +64,6 @@ type DeviceManager struct {
 	deviceAvailable    *sync.Cond
 	// device choose strategy
 	strategy deviceChooseStrategy
-}
-
-// JDevicemanager is used for safe Marshal DeviceManager
-// https://stackoverflow.com/a/18288695
-type JDevicemanager DeviceManager
-
-// MarshalJSON marshals DeviceManager
-func (d *DeviceManager) MarshalJSON() ([]byte, error) {
-	d.RLock()
-	defer d.RUnlock()
-
-	return json.Marshal(JDevicemanager(*d))
 }
 
 // NewDeviceManager is used to init a DeviceManager.
@@ -111,6 +98,7 @@ func NewDeviceManager(cfg common.QueryConfig) *DeviceManager {
 	}
 
 	deviceManager := &DeviceManager{
+		RWMutex:            &sync.RWMutex{},
 		DeviceInfos:        deviceInfos,
 		MaxAvailableMemory: maxAvailableMem,
 		Timeout:            timeout,
