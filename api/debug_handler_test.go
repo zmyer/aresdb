@@ -146,7 +146,7 @@ var _ = ginkgo.Describe("DebugHandler", func() {
 		testShard, _ := memStore.GetTableShard(testTableName, testTableShardID)
 		memstore.NewArchiveStoreVersion(100, testShard)
 		testShard.Schema = testSchema
-		testShard.ArchiveStore = memstore.ArchiveStore{
+		testShard.ArchiveStore = &memstore.ArchiveStore{
 			CurrentVersion: memstore.NewArchiveStoreVersion(100, testShard),
 		}
 
@@ -357,7 +357,7 @@ var _ = ginkgo.Describe("DebugHandler", func() {
 		request.Body.Cutoff = 200
 		job := new(memMocks.Job)
 		scheduler.On("NewArchivingJob", mock.Anything, mock.Anything, mock.Anything).Return(job)
-		scheduler.On("SubmitJob", job).Return(nil)
+		scheduler.On("SubmitJob", job).Return(nil, nil)
 		job.On("Run", mock.Anything).Return(nil)
 		correctURL := fmt.Sprintf("http://%s/debug/%s/%d/archive", hostPort, testTableName, testTableShardID)
 		contentType := "application/json"
@@ -503,146 +503,154 @@ var _ = ginkgo.Describe("DebugHandler", func() {
 		Ω(err).Should(BeNil())
 		Ω(resp.StatusCode).Should(Equal(http.StatusOK))
 		Ω(string(bs)).Should(MatchJSON(`
-			{
-        "schema": {
-          "schema": {
-            "name": "test",
-            "columns": [
-              {
-                "name": "c0",
-                "type": "",
-                "config": {}
-              },
-              {
-                "name": "c1",
-                "type": "",
-                "config": {}
-              },
-              {
-                "name": "c2",
-                "type": "",
-                "config": {}
-              },
-              {
-                "name": "c3",
-                "type": "",
-                "config": {}
-              },
-              {
-                "name": "c4",
-                "type": "",
-                "config": {}
-              },
-              {
-                "name": "c5",
-                "type": "Bool",
-                "config": {}
-              },
-              {
-                "name": "c6",
-                "type": "SmallEnum",
-                "config": {}
-              }
-            ],
-            "primaryKeyColumns": null,
-            "isFactTable": true,
-            "config": {
-              "batchSize": 10,
-              "backfillMaxBufferSize": 4294967296,
-              "backfillThresholdInBytes": 2097152
-            },
-			"version": 0
-          },
-          "columnIDs": {
-            "c0": 0,
-            "c1": 1,
-            "c2": 2,
-            "c3": 3,
-            "c4": 4,
-            "c5": 5,
-            "c6": 6
-          },
-          "enumDicts": {
-            "c6": {
-              "capacity": 0,
-              "dict": null,
-              "reverseDict": [
-                "enum case1"
-              ]
-            }
-          },
-          "valueTypeByColumn": [
-            0,
-            0,
-            0,
-            0,
-            0,
-            1,
-            524296
-          ],
-          "primaryKeyBytes": 0,
-          "primaryKeyColumnTypes": []
+{
+  "schema": {
+    "schema": {
+      "name": "test",
+      "columns": [
+        {
+          "name": "c0",
+          "type": "",
+          "config": {},
+          "hllConfig": {}
         },
-        "liveStore": {
-          "backfillManager": {
-            "numRecords": 0,
-            "currentBufferSize": 0,
-            "backfillingBufferSize": 0,
-            "maxBufferSize": 4294967296,
-            "backfillThresholdInBytes": 2097152,
-            "lastRedoFile": 0,
-            "lastBatchOffset": 0,
-            "currentRedoFile": 0,
-            "currentBatchOffset": 0,
-            "numUpsertBatches": 0
-          },
-          "batchSize": 10,
-          "batches": {
-            "-2147483648": {
-              "capacity": 10,
-              "numColumns": 7
-            }
-          },
-          "lastModifiedTimePerColumn": null,
-          "lastReadRecord": {
-            "batchID": -2147483648,
-            "index": 1
-          },
-          "nextWriteRecord": {
-            "batchID": -2147483648,
-            "index": 1
-          },
-          "primaryKey": {
-            "allocatedBytes": 104000,
-            "capacity": 8000,
-            "eventTimeCutoff": 0,
-            "size": 1
-          },
-          "redoLogManager": {
-            "rotationInterval": 0,
-            "maxRedoLogSize": 0,
-            "currentRedoLogSize": 0,
-            "totalRedologSize": 0,
-            "maxEventTimePerFile": {},
-            "batchCountPerFile": {},
-            "sizePerFile": {},
-            "currentFileCreationTime": 0
-          },
-          "snapshotManager": null
+        {
+          "name": "c1",
+          "type": "",
+          "config": {},
+          "hllConfig": {}
         },
-        "archiveStore": {
-          "currentVersion": {
-            "batches": {
-              "1": {
-                "numColumns": 6,
-                "size": 5,
-                "version": 0
-              }
-            },
-            "archivingCutoff": 100
-          }
+        {
+          "name": "c2",
+          "type": "",
+          "config": {},
+          "hllConfig": {}
+        },
+        {
+          "name": "c3",
+          "type": "",
+          "config": {},
+          "hllConfig": {}
+        },
+        {
+          "name": "c4",
+          "type": "",
+          "config": {},
+          "hllConfig": {}
+        },
+        {
+          "name": "c5",
+          "type": "Bool",
+          "config": {},
+          "hllConfig": {}
+        },
+        {
+          "name": "c6",
+          "type": "SmallEnum",
+          "config": {},
+          "hllConfig": {}
         }
+      ],
+      "primaryKeyColumns": null,
+      "isFactTable": true,
+      "config": {
+        "batchSize": 10,
+        "backfillMaxBufferSize": 4294967296,
+        "backfillThresholdInBytes": 2097152
+      },
+      "incarnation": 0,
+      "version": 0
+    },
+    "columnIDs": {
+      "c0": 0,
+      "c1": 1,
+      "c2": 2,
+      "c3": 3,
+      "c4": 4,
+      "c5": 5,
+      "c6": 6
+    },
+    "enumDicts": {
+      "c6": {
+        "capacity": 0,
+        "dict": null,
+        "reverseDict": [
+          "enum case1"
+        ]
       }
+    },
+    "valueTypeByColumn": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      524296
+    ],
+    "primaryKeyBytes": 0,
+    "primaryKeyColumnTypes": []
+  },
+  "liveStore": {
+    "backfillManager": {
+      "numRecords": 0,
+      "currentBufferSize": 0,
+      "backfillingBufferSize": 0,
+      "maxBufferSize": 4294967296,
+      "backfillThresholdInBytes": 2097152,
+      "lastRedoFile": 0,
+      "lastBatchOffset": 0,
+      "currentRedoFile": 0,
+      "currentBatchOffset": 0,
+      "numUpsertBatches": 0
+    },
+    "batchSize": 10,
+    "batches": {
+      "-2147483648": {
+        "capacity": 10,
+        "numColumns": 7
+      }
+    },
+    "lastModifiedTimePerColumn": null,
+    "lastReadRecord": {
+      "batchID": -2147483648,
+      "index": 1
+    },
+    "nextWriteRecord": {
+      "batchID": -2147483648,
+      "index": 1
+    },
+    "primaryKey": {
+      "allocatedBytes": 104000,
+      "capacity": 8000,
+      "eventTimeCutoff": 0,
+      "size": 1
+    },
+    "redoLogManager": {
+      "rotationInterval": 0,
+      "maxRedoLogSize": 0,
+      "currentRedoLogSize": 0,
+      "totalRedologSize": 0,
+      "maxEventTimePerFile": {},
+      "batchCountPerFile": {},
+      "sizePerFile": {},
+      "currentFileCreationTime": 0
+    },
+    "snapshotManager": null
+  },
+  "archiveStore": {
+    "currentVersion": {
+      "batches": {
+        "1": {
+          "numColumns": 6,
+          "size": 5,
+          "version": 0
+        }
+      },
+      "archivingCutoff": 100
+    }
+  }
+}
 		`))
 
 		// shard does not exist.
@@ -914,7 +922,7 @@ var _ = ginkgo.Describe("DebugHandler", func() {
 		Ω(err).Should(BeNil())
 		job := new(memMocks.Job)
 		scheduler.On("NewBackfillJob", mock.Anything, mock.Anything, mock.Anything).Return(job)
-		scheduler.On("SubmitJob", job).Return(nil)
+		scheduler.On("SubmitJob", job).Return(nil, nil)
 		job.On("Run", mock.Anything).Return(nil)
 		correctURL := fmt.Sprintf("http://%s/debug/%s/%d/backfill", hostPort, testTableName, testTableShardID)
 		contentType := "application/json"
@@ -941,7 +949,7 @@ var _ = ginkgo.Describe("DebugHandler", func() {
 		bs, err := json.Marshal(request)
 		job := new(memMocks.Job)
 		scheduler.On("NewSnapshotJob", mock.Anything, mock.Anything, mock.Anything).Return(job)
-		scheduler.On("SubmitJob", job).Return(nil)
+		scheduler.On("SubmitJob", job).Return(nil, nil)
 		job.On("Run", mock.Anything).Return(nil)
 		correctURL := fmt.Sprintf("http://%s/debug/%s/%d/snapshot", hostPort, testTableName, testTableShardID)
 		contentType := "application/json"
@@ -968,7 +976,7 @@ var _ = ginkgo.Describe("DebugHandler", func() {
 		bs, err := json.Marshal(request)
 		job := new(memMocks.Job)
 		scheduler.On("NewPurgeJob", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(job)
-		scheduler.On("SubmitJob", job).Return(nil)
+		scheduler.On("SubmitJob", job).Return(nil, nil)
 		job.On("Run", mock.Anything).Return(nil)
 		correctURL := fmt.Sprintf("http://%s/debug/%s/%d/purge", hostPort, testTableName, testTableShardID)
 		contentType := "application/json"

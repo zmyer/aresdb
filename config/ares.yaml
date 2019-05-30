@@ -17,11 +17,10 @@ http:
   read_time_out_in_seconds: 20
   write_time_out_in_seconds: 300 # 5 minutes to write the result
 
-clients:
+gateways:
   # example controller client configs
   controller:
-    host: localhost
-    port: 6708
+    address: localhost:6708
     headers:
       RPC-Caller:
         - aresdb

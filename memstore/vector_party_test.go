@@ -25,7 +25,28 @@ import (
 
 var _ = ginkgo.Describe("VectorParty", func() {
 
-	ginkgo.It("Iterator should work", func() {
+	ginkgo.It("GetHostVectorPartySlice should work", func() {
+		locker := &sync.RWMutex{}
+		vp, err := testFactory.ReadArchiveVectorParty("sortedVP4", locker)
+		Ω(err).Should(BeNil())
+		hostVPSlice := vp.GetHostVectorPartySlice(0, vp.length)
+		Ω(hostVPSlice).Should(Equal(common.HostVectorPartySlice{
+			Values:          unsafe.Pointer(vp.values.buffer),
+			Nulls:           unsafe.Pointer(vp.nulls.buffer),
+			Counts:          unsafe.Pointer(vp.counts.buffer),
+			Length:          5,
+			ValueType:       vp.dataType,
+			DefaultValue:    vp.defaultValue,
+			ValueStartIndex: 0,
+			NullStartIndex:  0,
+			CountStartIndex: 0,
+			ValueBytes:      64,
+			NullBytes:       64,
+			CountBytes:      64,
+		}))
+	})
+
+	ginkgo.It("Slice should work", func() {
 		locker := &sync.RWMutex{}
 		vp, err := testFactory.ReadArchiveVectorParty("sortedVP4", locker)
 		Ω(err).Should(BeNil())
@@ -134,6 +155,10 @@ var _ = ginkgo.Describe("VectorParty", func() {
 		Ω(err).Should(BeNil())
 		startIndex, endIndex := vp.SliceIndex(3, 15)
 		Ω(startIndex).Should(Equal(1))
+		Ω(endIndex).Should(Equal(4))
+
+		startIndex, endIndex = vp.SliceIndex(21, 21)
+		Ω(startIndex).Should(Equal(4))
 		Ω(endIndex).Should(Equal(4))
 	})
 

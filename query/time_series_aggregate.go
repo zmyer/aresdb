@@ -18,13 +18,13 @@ package query
 // #include "time_series_aggregate.h"
 import "C"
 import (
+	"github.com/uber/aresdb/utils"
 	"strconv"
 	"unsafe"
 
 	"github.com/uber/aresdb/cgoutils"
 	"github.com/uber/aresdb/memstore"
 	memCom "github.com/uber/aresdb/memstore/common"
-	"github.com/uber/aresdb/memutils"
 	"github.com/uber/aresdb/query/common"
 	"github.com/uber/aresdb/query/expr"
 )
@@ -168,26 +168,26 @@ func makeVectorPartySlice(column deviceVectorPartySlice) C.VectorPartySlice {
 	var valuesOffset uint32
 
 	if !column.counts.isNull() {
-		basePtr = memutils.MemAccess(column.counts.getPointer(), column.countStartIndex*4)
+		basePtr = utils.MemAccess(column.counts.getPointer(), column.countStartIndex*4)
 	}
 
 	if !column.nulls.isNull() {
 		startingIndex = column.nullStartIndex % 8
-		nulls := memutils.MemAccess(column.nulls.getPointer(), column.nullStartIndex/8)
+		nulls := utils.MemAccess(column.nulls.getPointer(), column.nullStartIndex/8)
 		if basePtr == nil {
 			basePtr = nulls
 		} else {
-			nullsOffset = uint32(memutils.MemDist(nulls, basePtr))
+			nullsOffset = uint32(utils.MemDist(nulls, basePtr))
 		}
 	}
 
 	if !column.values.isNull() {
-		values := memutils.MemAccess(column.values.getPointer(),
+		values := utils.MemAccess(column.values.getPointer(),
 			column.valueStartIndex*memCom.DataTypeBits(column.valueType)/8)
 		if basePtr == nil {
 			basePtr = values
 		} else {
-			valuesOffset = uint32(memutils.MemDist(values, basePtr))
+			valuesOffset = uint32(utils.MemDist(values, basePtr))
 		}
 	}
 
@@ -246,7 +246,7 @@ func makeConstantInput(val interface{}, isValid bool) C.InputVector {
 func makeScratchSpaceInput(values unsafe.Pointer, nulls unsafe.Pointer, dataType C.enum_DataType) C.InputVector {
 	var scratchSpaceVector C.ScratchSpaceVector
 	scratchSpaceVector.Values = (*C.uint8_t)(values)
-	scratchSpaceVector.NullsOffset = (C.uint32_t)(memutils.MemDist(nulls, values))
+	scratchSpaceVector.NullsOffset = (C.uint32_t)(utils.MemDist(nulls, values))
 	scratchSpaceVector.DataType = dataType
 
 	var vector C.InputVector
@@ -272,8 +272,8 @@ func makeMeasureVectorOutput(measureVector unsafe.Pointer, outputDataType C.enum
 func makeDimensionVectorOutput(dimensionVector unsafe.Pointer, valueOffset, nullOffset int, dataType C.enum_DataType) C.OutputVector {
 	var dimensionOutputVector C.DimensionOutputVector
 
-	dimensionOutputVector.DimValues = (*C.uint8_t)(memutils.MemAccess(dimensionVector, valueOffset))
-	dimensionOutputVector.DimNulls = (*C.uint8_t)(memutils.MemAccess(dimensionVector, nullOffset))
+	dimensionOutputVector.DimValues = (*C.uint8_t)(utils.MemAccess(dimensionVector, valueOffset))
+	dimensionOutputVector.DimNulls = (*C.uint8_t)(utils.MemAccess(dimensionVector, nullOffset))
 	dimensionOutputVector.DataType = dataType
 
 	var vector C.OutputVector
@@ -285,7 +285,7 @@ func makeDimensionVectorOutput(dimensionVector unsafe.Pointer, valueOffset, null
 func makeScratchSpaceOutput(values unsafe.Pointer, nulls unsafe.Pointer, dataType C.enum_DataType) C.OutputVector {
 	var scratchSpaceVector C.ScratchSpaceVector
 	scratchSpaceVector.Values = (*C.uint8_t)(values)
-	scratchSpaceVector.NullsOffset = (C.uint32_t)(memutils.MemDist(nulls, values))
+	scratchSpaceVector.NullsOffset = (C.uint32_t)(utils.MemDist(nulls, values))
 	scratchSpaceVector.DataType = dataType
 
 	var vector C.OutputVector
@@ -370,7 +370,7 @@ func (bc *oopkBatchContext) makeWriteToMeasureVectorAction(aggFunc C.enum_Aggreg
 		if bc.size <= 0 {
 			return
 		}
-		measureVector := memutils.MemAccess(bc.measureVectorD[0].getPointer(), bc.resultSize*outputWidthInByte)
+		measureVector := utils.MemAccess(bc.measureVectorD[0].getPointer(), bc.resultSize*outputWidthInByte)
 		// write measure out to measureVectorD[1] for hll query
 		if aggFunc == C.AGGR_HLL {
 			measureVector = bc.measureVectorD[1].getPointer()
@@ -392,7 +392,7 @@ func (bc *oopkBatchContext) makeWriteToMeasureVectorAction(aggFunc C.enum_Aggreg
 	}
 }
 
-func (bc *oopkBatchContext) makeWriteToDimensionVectorAction(valueOffset, nullOffset int) rootAction {
+func (bc *oopkBatchContext) makeWriteToDimensionVectorAction(valueOffset, nullOffset, prevResultSize int) rootAction {
 	return func(functorType uint32, stream unsafe.Pointer, device int, inputs []C.InputVector, exp expr.Expr) {
 		// If current batch size is already 0, short circuit to avoid issuing a noop cuda call.
 		if bc.size <= 0 {
@@ -406,8 +406,8 @@ func (bc *oopkBatchContext) makeWriteToDimensionVectorAction(valueOffset, nullOf
 			// move dimensionVectorD to the start position of current batch
 			// dimension vector start position + bc.resultSize * dataBytes
 			// null vector start position + bc.resultSize
-			valueOffset+dataBytes*bc.resultSize,
-			nullOffset+bc.resultSize,
+			valueOffset+dataBytes*prevResultSize,
+			nullOffset+prevResultSize,
 			DataTypeToCDataType[dataType])
 
 		if len(inputs) == 1 {
@@ -580,7 +580,7 @@ func (bc *oopkBatchContext) makeGeoPointInputVector(pointTableID int, pointColum
 }
 
 func (bc *oopkBatchContext) writeGeoShapeDim(geo *geoIntersection,
-	outputPredicate devicePointer, dimValueOffset, dimNullOffset int, sizeBeforeGeoFilter int, stream unsafe.Pointer, device int) {
+	outputPredicate devicePointer, dimValueOffset, dimNullOffset int, sizeBeforeGeoFilter, prevResultSize int, stream unsafe.Pointer, device int) {
 	if bc.size <= 0 || geo.shapeLatLongs.isNull() {
 		return
 	}
@@ -590,10 +590,10 @@ func (bc *oopkBatchContext) writeGeoShapeDim(geo *geoIntersection,
 	var dimensionOutputVector C.DimensionOutputVector
 	dimensionVector := bc.dimensionVectorD[0].getPointer()
 	// move dimensionVectorD to the start position of current batch
-	// dimension vector start position + bc.resultSize * dataBytes
-	// null vector start position + bc.resultSize
-	dimensionOutputVector.DimValues = (*C.uint8_t)(memutils.MemAccess(dimensionVector, dimValueOffset+bc.resultSize))
-	dimensionOutputVector.DimNulls = (*C.uint8_t)(memutils.MemAccess(dimensionVector, dimNullOffset+bc.resultSize))
+	// dimension vector start position + prevResultSize * dataBytes
+	// null vector start position + prevResultSize
+	dimensionOutputVector.DimValues = (*C.uint8_t)(utils.MemAccess(dimensionVector, dimValueOffset+prevResultSize))
+	dimensionOutputVector.DimNulls = (*C.uint8_t)(utils.MemAccess(dimensionVector, dimNullOffset+prevResultSize))
 	dimensionOutputVector.DataType = C.Uint8
 
 	totalWords := (geo.numShapes + 31) / 32
@@ -649,13 +649,12 @@ func (bc *oopkBatchContext) hll(numDims common.DimCountsPerDimWidth, isLastBatch
 	return
 }
 
-func (bc *oopkBatchContext) sortByKey(numDims common.DimCountsPerDimWidth, valueWidth int, stream unsafe.Pointer, device int) {
+func (bc *oopkBatchContext) sortByKey(numDims common.DimCountsPerDimWidth, stream unsafe.Pointer, device int) {
 	keys := makeDimensionColumnVector(bc.dimensionVectorD[0].getPointer(), bc.hashVectorD[0].getPointer(),
 		bc.dimIndexVectorD[0].getPointer(), numDims, bc.resultCapacity)
-	values := (*C.uint8_t)(bc.measureVectorD[0].getPointer())
 	doCGoCall(func() C.CGoCallResHandle {
 		// sort the previous result with current batch together
-		return C.Sort(keys, values, (C.int)(valueWidth), (C.int)(bc.resultSize+bc.size), stream, C.int(device))
+		return C.Sort(keys, (C.int)(bc.resultSize+bc.size), stream, C.int(device))
 	})
 }
 
@@ -670,6 +669,19 @@ func (bc *oopkBatchContext) reduceByKey(numDims common.DimCountsPerDimWidth, val
 		return C.Reduce(inputKeys, inputValues, outputKeys, outputValues, (C.int)(valueWidth), (C.int)(bc.resultSize+bc.size), aggFunc,
 			stream, C.int(device))
 	}))
+}
+
+func (bc *oopkBatchContext) expand(numDims common.DimCountsPerDimWidth, stream unsafe.Pointer, device int) {
+	inputKeys := makeDimensionColumnVector(
+		bc.dimensionVectorD[0].getPointer(), bc.hashVectorD[0].getPointer(), bc.dimIndexVectorD[0].getPointer(), numDims, bc.resultCapacity)
+	outputKeys := makeDimensionColumnVector(
+		bc.dimensionVectorD[1].getPointer(), bc.hashVectorD[1].getPointer(), bc.dimIndexVectorD[1].getPointer(), numDims, bc.resultCapacity)
+
+	bc.resultSize = int(doCGoCall(func() C.CGoCallResHandle {
+		return C.Expand(inputKeys, outputKeys, (*C.uint32_t)(bc.baseCountD.getPointer()), (*C.uint32_t)(bc.indexVectorD.getPointer()),
+			C.int(bc.size), 0, stream, C.int(device))
+	}))
+	bc.dimensionVectorD[0], bc.dimensionVectorD[1] = bc.dimensionVectorD[1], bc.dimensionVectorD[0]
 }
 
 func (bc *oopkBatchContext) allocateStackFrame() (values, nulls devicePointer) {

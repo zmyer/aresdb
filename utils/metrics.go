@@ -32,15 +32,19 @@ const (
 	ArchivingTimingTotal
 	ArchivingHighWatermark
 	ArchivingLowWatermark
+	ArchivingCount
 	BackfillTimingTotal
 	BackfillLockTiming
+	BackfillCount
 	EstimatedDeviceMemory
 	HTTPHandlerCall
 	HTTPHandlerLatency
 	IngestedRecords
 	AppendedRecords
 	UpdatedRecords
+	IngestSkippedRecords
 	IngestedUpsertBatches
+	UpsertBatchSize
 	PrimaryKeyMissing
 	TimeColumnMissing
 	BackfillRecords
@@ -71,6 +75,8 @@ const (
 	QueryFailed
 	QuerySucceeded
 	QueryLatency
+	QuerySQLParsingLatency
+	QueryDimReadLatency
 	QueryWaitForMemoryDuration
 	QueryReceived
 	QueryLiveRecordsProcessed
@@ -84,12 +90,15 @@ const (
 	SnapshotTimingTotal
 	SnapshotTimingLoad
 	SnapshotTimingBuildIndex
+	SnapshotCount
 	TimezoneLookupTableCreationTime
 	RedoLogFileCorrupt
 	MemoryOverflow
 	PreloadingZoneEvicted
 	PurgeTimingTotal
 	PurgedBatches
+	PurgeCount
+	JobFailuresCount
 	RecordsFromFuture
 	BatchSize
 	BatchSizeReportTime
@@ -157,9 +166,12 @@ const (
 	scopeNameIngestedRecords                 = "ingested_records"
 	scopeNameAppendedRecords                 = "appended_records"
 	scopeNameUpdatedRecords                  = "updated_records"
+	scopeNameIngestSkippedRecords            = "skipped_records"
 	scopeNameIngestedUpsertBatches           = "ingested_upsert_batches"
+	scopeNameUpsertBatchSize                 = "upsert_batch_size"
 	scopeNameLoad                            = "load"
 	scopeNameTotal                           = "total"
+	scopeNameCount                           = "count"
 	scopeNameBuildIndex                      = "build_index"
 	scopeNameTotalMemorySize                 = "total_memory_size"
 	scopeNameUnmanagedMemorySize             = "unmanaged_memory_size"
@@ -176,6 +188,8 @@ const (
 	scopeNameQueryFailed                     = "query_failed"
 	scopeNameQuerySucceeded                  = "query_succeeded"
 	scopeNameQueryLatency                    = "query_latency"
+	scopeNameQueryDimReadLatency             = "query_dim_read_latency"
+	scopeNameQuerySQLParsingLatency          = "sql_parsing_latency"
 	scopeNameQueryWaitForMemoryDuration      = "query_wait_for_memory_duration"
 	scopeNameQueryReceived                   = "query_received"
 	scopeNameQueryRecordsProcessed           = "records_processed"
@@ -196,6 +210,7 @@ const (
 	scopeNameSchemaUpdateCount               = "schema_updates"
 	scopeNameSchemaDeletionCount             = "schema_deletions"
 	scopeNameSchemaCreationCount             = "schema_creations"
+	scopeNameJobFailuresCount                = "job_failures_count"
 )
 
 // Metric tag names
@@ -251,6 +266,14 @@ var metricsDefs = map[MetricName]metricDefinition{
 			metricsTagComponent: metricsComponentMemStore,
 		},
 	},
+	ArchivingCount: {
+		name:       scopeNameCount,
+		metricType: Counter,
+		tags: map[string]string{
+			metricsTagOperation: metricsOperationArchiving,
+			metricsTagComponent: metricsComponentMemStore,
+		},
+	},
 	ArchivingRecords: {
 		name:       scopeNameArchivingRecords,
 		metricType: Counter,
@@ -294,6 +317,14 @@ var metricsDefs = map[MetricName]metricDefinition{
 	BackfillLockTiming: {
 		name:       scopeNameBackfillLockTiming,
 		metricType: Timer,
+		tags: map[string]string{
+			metricsTagOperation: metricsOperationBackfill,
+			metricsTagComponent: metricsComponentMemStore,
+		},
+	},
+	BackfillCount: {
+		name:       scopeNameCount,
+		metricType: Counter,
 		tags: map[string]string{
 			metricsTagOperation: metricsOperationBackfill,
 			metricsTagComponent: metricsComponentMemStore,
@@ -344,9 +375,25 @@ var metricsDefs = map[MetricName]metricDefinition{
 			metricsTagComponent: metricsComponentMemStore,
 		},
 	},
+	IngestSkippedRecords: {
+		name:       scopeNameIngestSkippedRecords,
+		metricType: Counter,
+		tags: map[string]string{
+			metricsTagOperation: metricsOperationIngestion,
+			metricsTagComponent: metricsComponentMemStore,
+		},
+	},
 	IngestedUpsertBatches: {
 		name:       scopeNameIngestedUpsertBatches,
 		metricType: Counter,
+		tags: map[string]string{
+			metricsTagOperation: metricsOperationIngestion,
+			metricsTagComponent: metricsComponentMemStore,
+		},
+	},
+	UpsertBatchSize: {
+		name:       scopeNameUpsertBatchSize,
+		metricType: Gauge,
 		tags: map[string]string{
 			metricsTagOperation: metricsOperationIngestion,
 			metricsTagComponent: metricsComponentMemStore,
@@ -576,6 +623,20 @@ var metricsDefs = map[MetricName]metricDefinition{
 			metricsTagComponent: metricsComponentQuery,
 		},
 	},
+	QuerySQLParsingLatency: {
+		name:       scopeNameQuerySQLParsingLatency,
+		metricType: Timer,
+		tags: map[string]string{
+			metricsTagComponent: metricsComponentQuery,
+		},
+	},
+	QueryDimReadLatency: {
+		name:       scopeNameQueryDimReadLatency,
+		metricType: Timer,
+		tags: map[string]string{
+			metricsTagComponent: metricsComponentQuery,
+		},
+	},
 	QueryWaitForMemoryDuration: {
 		name:       scopeNameQueryWaitForMemoryDuration,
 		metricType: Timer,
@@ -672,6 +733,14 @@ var metricsDefs = map[MetricName]metricDefinition{
 	SnapshotTimingBuildIndex: {
 		name:       scopeNameBuildIndex,
 		metricType: Timer,
+		tags: map[string]string{
+			metricsTagOperation: metricsOperationSnapshot,
+			metricsTagComponent: metricsComponentMemStore,
+		},
+	},
+	SnapshotCount: {
+		name:       scopeNameCount,
+		metricType: Counter,
 		tags: map[string]string{
 			metricsTagOperation: metricsOperationSnapshot,
 			metricsTagComponent: metricsComponentMemStore,
@@ -777,6 +846,19 @@ var metricsDefs = map[MetricName]metricDefinition{
 		tags: map[string]string{
 			metricsTagComponent: metricsComponentMetaStore,
 		},
+	},
+	PurgeCount: {
+		name:       scopeNameCount,
+		metricType: Counter,
+		tags: map[string]string{
+			metricsTagOperation: metricsOperationPurge,
+			metricsTagComponent: metricsComponentMemStore,
+		},
+	},
+	JobFailuresCount: {
+		name:       scopeNameJobFailuresCount,
+		metricType: Counter,
+		tags:       map[string]string{},
 	},
 }
 

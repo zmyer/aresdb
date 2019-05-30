@@ -33,11 +33,14 @@ func (m *memStoreImpl) Snapshot(table string, shardID int, reporter SnapshotJobD
 		reporter(jobKey, func(status *SnapshotJobDetail) {
 			status.LastDuration = duration
 		})
+		utils.GetReporter(table, shardID).
+			GetCounter(utils.SnapshotCount).Inc(1)
 	}()
 
 	shard, err := m.GetTableShard(table, shardID)
 	if err != nil {
-		return err
+		utils.GetLogger().With("table", table, "shard", shardID, "error", err).Warn("Failed to find shard, is it deleted?")
+		return nil
 	}
 
 	defer shard.Users.Done()

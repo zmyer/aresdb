@@ -72,8 +72,8 @@ var _ = ginkgo.Describe("recovery", func() {
 		Ω(*(*uint32)(value)).Should(Equal(uint32(123)))
 		Ω(validity).Should(BeTrue())
 		//  Validate redo log max event time.
-		Ω(len(shard.LiveStore.RedoLogManager.MaxEventTimePerFile)).Should(Equal(1))
-		Ω(shard.LiveStore.RedoLogManager.MaxEventTimePerFile).Should(Equal(map[int64]uint32{1: 123}))
+		Ω(len(shard.LiveStore.RedoLogManager.(*fileRedologManager).MaxEventTimePerFile)).Should(Equal(1))
+		Ω(shard.LiveStore.RedoLogManager.(*fileRedologManager).MaxEventTimePerFile).Should(Equal(map[int64]uint32{1: 123}))
 
 		// New shard abc-1 being assigned.
 		file2 := &testing.TestReadWriteCloser{}
@@ -86,7 +86,7 @@ var _ = ginkgo.Describe("recovery", func() {
 		diskStore.On("OpenLogFileForReplay", "abc", 1, int64(1)).Return(file2, nil)
 		metaStore.On("GetArchivingCutoff", "abc", 1).Return(uint32(0), nil)
 
-		events <- metaCom.ShardOwnership{"abc", 1, true}
+		events <- metaCom.ShardOwnership{TableName: "abc", Shard: 1, ShouldOwn: true}
 		<-done
 
 		shard = memstore.TableShards["abc"][1]
@@ -95,8 +95,8 @@ var _ = ginkgo.Describe("recovery", func() {
 		Ω(*(*uint32)(value)).Should(Equal(uint32(123)))
 		Ω(validity).Should(BeTrue())
 		//  Validate redo log max event time.
-		Ω(len(shard.LiveStore.RedoLogManager.MaxEventTimePerFile)).Should(Equal(1))
-		Ω(shard.LiveStore.RedoLogManager.MaxEventTimePerFile).Should(Equal(map[int64]uint32{1: 123}))
+		Ω(len(shard.LiveStore.RedoLogManager.(*fileRedologManager).MaxEventTimePerFile)).Should(Equal(1))
+		Ω(shard.LiveStore.RedoLogManager.(*fileRedologManager).MaxEventTimePerFile).Should(Equal(map[int64]uint32{1: 123}))
 
 		Ω(shard.LiveStore.BackfillManager.CurrentRedoFile).Should(BeEquivalentTo(1))
 		Ω(shard.LiveStore.BackfillManager.CurrentBatchOffset).Should(BeEquivalentTo(0))

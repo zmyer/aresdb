@@ -47,13 +47,13 @@ type HTTPConfig struct {
 
 // ControllerConfig is the config for ares-controller client
 type ControllerConfig struct {
-	Host    string      `yaml:"host"`
-	Port    int         `yaml:"port"`
-	Headers http.Header `yaml:"headers"`
+	Address    string      `yaml:"address"`
+	Headers    http.Header `yaml:"headers"`
+	TimeoutSec int         `yaml:"timeout"`
 }
 
-// ClientsConfig is the config for all clients
-type ClientsConfig struct {
+// GatewayConfig is the config for all gateway
+type GatewayConfig struct {
 	Controller *ControllerConfig `yaml:"controller,omitempty"`
 }
 
@@ -89,11 +89,11 @@ type AresServerConfig struct {
 	Version string `yaml:"version"`
 
 	// environment
-	Env string `yaml: "env"`
+	Env string `yaml:"env"`
 
 	Query     QueryConfig     `yaml:"query"`
 	DiskStore DiskStoreConfig `yaml:"disk_store"`
 	HTTP      HTTPConfig      `yaml:"http"`
 	Cluster   ClusterConfig   `yaml:"cluster"`
-	Clients   ClientsConfig   `yaml:"clients"`
+	Gateway   GatewayConfig   `yaml:"gateway"`
 }

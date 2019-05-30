@@ -28,14 +28,23 @@ char *checkCUDAError(const char *message) {
   if (error != cudaSuccess) {
     char *buffer = reinterpret_cast<char *>(malloc(MAX_ERROR_LEN));
     snprintf(buffer, MAX_ERROR_LEN,
-             "ERROR when calling CUDA functions from host: %s: %s\n",
+             "ERROR when calling CUDA functions: %s: %s\n",
              message, cudaGetErrorString(error));
     return buffer;
   }
   return NULL;
 }
 
-extern "C" CGoCallResHandle HostAlloc(size_t bytes) {
+DeviceMemoryFlags GetFlags() {
+  return DEVICE_MEMORY_IMPLEMENTATION_FLAG;
+}
+
+CGoCallResHandle Init() {
+  CGoCallResHandle resHandle = {NULL, NULL};
+  return resHandle;
+}
+
+CGoCallResHandle HostAlloc(size_t bytes) {
   CGoCallResHandle resHandle = {NULL, NULL};
   // cudaHostAllocPortable makes sure that the allocation is associated with all
   // devices, not just the current device.
@@ -45,14 +54,14 @@ extern "C" CGoCallResHandle HostAlloc(size_t bytes) {
   return resHandle;
 }
 
-extern "C" CGoCallResHandle HostFree(void *p) {
+CGoCallResHandle HostFree(void *p) {
   CGoCallResHandle resHandle = {NULL, NULL};
   cudaFreeHost(p);
   resHandle.pStrErr = checkCUDAError("Free");
   return resHandle;
 }
 
-extern "C" CGoCallResHandle CreateCudaStream(int device) {
+CGoCallResHandle CreateCudaStream(int device) {
   CGoCallResHandle resHandle = {NULL, NULL};
   cudaSetDevice(device);
   cudaStream_t s = NULL;
@@ -62,7 +71,7 @@ extern "C" CGoCallResHandle CreateCudaStream(int device) {
   return resHandle;
 }
 
-extern "C" CGoCallResHandle WaitForCudaStream(void *s, int device) {
+CGoCallResHandle WaitForCudaStream(void *s, int device) {
   CGoCallResHandle resHandle = {NULL, NULL};
   cudaSetDevice(device);
   cudaStreamSynchronize((cudaStream_t) s);
@@ -70,7 +79,7 @@ extern "C" CGoCallResHandle WaitForCudaStream(void *s, int device) {
   return resHandle;
 }
 
-extern "C" CGoCallResHandle DestroyCudaStream(void *s, int device) {
+CGoCallResHandle DestroyCudaStream(void *s, int device) {
   CGoCallResHandle resHandle = {NULL, NULL};
   cudaSetDevice(device);
   cudaStreamDestroy((cudaStream_t) s);
@@ -78,7 +87,7 @@ extern "C" CGoCallResHandle DestroyCudaStream(void *s, int device) {
   return resHandle;
 }
 
-extern "C" CGoCallResHandle DeviceAllocate(size_t bytes, int device) {
+CGoCallResHandle DeviceAllocate(size_t bytes, int device) {
   CGoCallResHandle resHandle = {NULL, NULL};
   cudaSetDevice(device);
   cudaMalloc(&resHandle.res, bytes);
@@ -87,7 +96,7 @@ extern "C" CGoCallResHandle DeviceAllocate(size_t bytes, int device) {
   return resHandle;
 }
 
-extern "C" CGoCallResHandle DeviceFree(void *p, int device) {
+CGoCallResHandle DeviceFree(void *p, int device) {
   CGoCallResHandle resHandle = {NULL, NULL};
   cudaSetDevice(device);
   cudaFree(p);
@@ -95,7 +104,7 @@ extern "C" CGoCallResHandle DeviceFree(void *p, int device) {
   return resHandle;
 }
 
-extern "C" CGoCallResHandle AsyncCopyHostToDevice(
+CGoCallResHandle AsyncCopyHostToDevice(
     void *dst, void *src, size_t bytes, void *stream, int device) {
   CGoCallResHandle resHandle = {NULL, NULL};
   cudaSetDevice(device);
@@ -105,7 +114,7 @@ extern "C" CGoCallResHandle AsyncCopyHostToDevice(
   return resHandle;
 }
 
-extern "C" CGoCallResHandle AsyncCopyDeviceToDevice(
+CGoCallResHandle AsyncCopyDeviceToDevice(
     void *dst, void *src, size_t bytes, void *stream, int device) {
   CGoCallResHandle resHandle = {NULL, NULL};
   cudaSetDevice(device);
@@ -115,7 +124,7 @@ extern "C" CGoCallResHandle AsyncCopyDeviceToDevice(
   return resHandle;
 }
 
-extern "C" CGoCallResHandle AsyncCopyDeviceToHost(
+CGoCallResHandle AsyncCopyDeviceToHost(
     void *dst, void *src, size_t bytes, void *stream, int device) {
   CGoCallResHandle resHandle = {NULL, NULL};
   cudaSetDevice(device);
@@ -125,14 +134,14 @@ extern "C" CGoCallResHandle AsyncCopyDeviceToHost(
   return resHandle;
 }
 
-extern "C" CGoCallResHandle GetDeviceCount() {
+CGoCallResHandle GetDeviceCount() {
   CGoCallResHandle resHandle = {NULL, NULL};
   cudaGetDeviceCount(reinterpret_cast<int *>(&resHandle.res));
   resHandle.pStrErr = checkCUDAError("GetDeviceCount");
   return resHandle;
 }
 
-extern "C" CGoCallResHandle GetDeviceGlobalMemoryInMB(int device) {
+CGoCallResHandle GetDeviceGlobalMemoryInMB(int device) {
   CGoCallResHandle resHandle = {NULL, NULL};
   cudaDeviceProp prop;
   cudaGetDeviceProperties(&prop, device);
@@ -141,17 +150,57 @@ extern "C" CGoCallResHandle GetDeviceGlobalMemoryInMB(int device) {
   return resHandle;
 }
 
-extern "C" CGoCallResHandle CudaProfilerStart() {
+CGoCallResHandle CudaProfilerStart() {
   CGoCallResHandle resHandle = {NULL, NULL};
   cudaProfilerStart();
   resHandle.pStrErr = checkCUDAError("cudaProfilerStart");
   return resHandle;
 }
 
-extern "C" CGoCallResHandle CudaProfilerStop() {
+CGoCallResHandle CudaProfilerStop() {
   CGoCallResHandle resHandle = {NULL, NULL};
   cudaDeviceSynchronize();
   cudaProfilerStop();
   resHandle.pStrErr = checkCUDAError("cudaProfilerStop");
+  return resHandle;
+}
+
+CGoCallResHandle GetDeviceMemoryInfo(size_t *freeSize, size_t *totalSize,
+                                     int device) {
+  char* pStrErr = reinterpret_cast<char *>(
+      malloc(sizeof(NOT_SUPPORTED_ERR_MSG)));
+  snprintf(pStrErr, sizeof(NOT_SUPPORTED_ERR_MSG),
+      NOT_SUPPORTED_ERR_MSG);
+  CGoCallResHandle resHandle = {NULL, pStrErr};
+  return resHandle;
+}
+
+CGoCallResHandle deviceMalloc(void **devPtr, size_t size) {
+  CGoCallResHandle resHandle = {NULL, NULL};
+  cudaMalloc(devPtr, size);
+  resHandle.pStrErr = checkCUDAError("deviceMalloc");
+  return resHandle;
+}
+
+CGoCallResHandle deviceFree(void *devPtr) {
+  CGoCallResHandle resHandle = {NULL, NULL};
+  cudaFree(devPtr);
+  resHandle.pStrErr = checkCUDAError("deviceFree");
+  return resHandle;
+}
+
+CGoCallResHandle deviceMemset(void *devPtr, int value, size_t count) {
+  CGoCallResHandle resHandle = {NULL, NULL};
+  cudaMemset(devPtr, value, count);
+  resHandle.pStrErr = checkCUDAError("deviceMemset");
+  return resHandle;
+}
+
+CGoCallResHandle asyncCopyHostToDevice(void* dst, const void* src,
+    size_t count, void* stream) {
+  CGoCallResHandle resHandle = {NULL, NULL};
+  cudaMemcpyAsync(dst, src, count,
+                  cudaMemcpyHostToDevice, (cudaStream_t) stream);
+  resHandle.pStrErr = checkCUDAError("asyncCopyHostToDevice");
   return resHandle;
 }

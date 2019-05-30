@@ -17,6 +17,7 @@ package query
 import (
 	"github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+	aresdbCommon "github.com/uber/aresdb/common"
 	"github.com/uber/aresdb/memstore"
 	"github.com/uber/aresdb/query/common"
 	"github.com/uber/aresdb/query/expr"
@@ -47,6 +48,7 @@ var _ = ginkgo.Describe("device_manager", func() {
 		}
 
 		deviceManager = &DeviceManager{
+			RWMutex:            &sync.RWMutex{},
 			DeviceInfos:        deviceInfoArray,
 			Timeout:            5,
 			MaxAvailableMemory: 3000,
@@ -117,6 +119,7 @@ var _ = ginkgo.Describe("device_manager", func() {
 
 	ginkgo.It("query queuing should work", func() {
 		deviceManager = &DeviceManager{
+			RWMutex: &sync.RWMutex{},
 			DeviceInfos: []*DeviceInfo{
 				{
 					DeviceID:             0,
@@ -214,6 +217,9 @@ var _ = ginkgo.Describe("device_manager", func() {
 		}
 
 		qc := AQLQueryContext{
+			Query: &AQLQuery{
+				Limit: 1000000,
+			},
 			TableScanners: []*TableScanner{
 				{
 					Columns: []int{0, 2, 1},
@@ -302,8 +308,17 @@ var _ = ginkgo.Describe("device_manager", func() {
 		memUsage = estimateSortReduceMemUsage(20)
 		Ω(memUsage).Should(Equal(720))
 
-		// batch processing
-		memUsage = qc.estimateMemUsageForBatch(20, 128+128+128)
+		// batch processing non-aggregate query
+		qc.isNonAggregationQuery = true
+		memUsage = qc.estimateMemUsageForBatch(20, 128+128+128, 40)
+		Ω(memUsage).Should(Equal(1404))
+		qc.Query.Limit = 10
+		memUsage = qc.estimateMemUsageForBatch(20, 128+128+128, 40)
+		Ω(memUsage).Should(Equal(1104))
+
+		// batch processing aggregate query
+		qc.isNonAggregationQuery = false
+		memUsage = qc.estimateMemUsageForBatch(20, 128+128+128, 40)
 		Ω(memUsage).Should(Equal(1204))
 
 		// live batch columns + processing
@@ -313,5 +328,12 @@ var _ = ginkgo.Describe("device_manager", func() {
 		// archive batch columns + processing
 		memUsage = qc.estimateArchiveBatchMemoryUsage(archiveBatch, false)
 		Ω(memUsage).Should(Equal(489))
+	})
+
+	ginkgo.It("NewDeviceManager should work", func() {
+		Ω(NewDeviceManager(aresdbCommon.QueryConfig{
+			DeviceMemoryUtilization: 0.8,
+			DeviceChoosingTimeout:   -1,
+		})).ShouldNot(BeNil())
 	})
 })

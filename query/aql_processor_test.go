@@ -22,6 +22,7 @@ import (
 	"math"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -41,6 +42,7 @@ import (
 	queryCom "github.com/uber/aresdb/query/common"
 	"github.com/uber/aresdb/query/expr"
 	"github.com/uber/aresdb/utils"
+	"net/http/httptest"
 )
 
 // readDeviceVPSlice reads a vector party from file and also translate it to device vp format:
@@ -62,7 +64,7 @@ var _ = ginkgo.Describe("aql_processor", func() {
 	var batch99, batch101, batch110, batch120, batch130 *memstore.Batch
 	var vs memstore.LiveStore
 	var archiveBatch0 *memstore.ArchiveBatch
-	var dataTypes []memCom.DataType
+	var archiveBatch1 *memstore.ArchiveBatch
 	var memStore memstore.MemStore
 	var metaStore metastore.MetaStore
 	var diskStore diskstore.DiskStore
@@ -82,7 +84,6 @@ var _ = ginkgo.Describe("aql_processor", func() {
 		memStore = new(memMocks.MemStore)
 		diskStore = new(diskMocks.DiskStore)
 
-		dataTypes = []memCom.DataType{memCom.Uint32, memCom.Bool, memCom.Float32}
 		var err error
 		batch110, err = testFactory.ReadLiveBatch("archiving/batch-110")
 		Ω(err).Should(BeNil())
@@ -95,6 +96,7 @@ var _ = ginkgo.Describe("aql_processor", func() {
 		batch130, err = testFactory.ReadLiveBatch("live/batch-130")
 		Ω(err).Should(BeNil())
 		tmpBatch, err := testFactory.ReadArchiveBatch("archiving/archiveBatch0")
+		tmpBatch1, err := testFactory.ReadArchiveBatch("archiving/archiveBatch1")
 
 		Ω(err).Should(BeNil())
 
@@ -142,8 +144,17 @@ var _ = ginkgo.Describe("aql_processor", func() {
 				Columns: tmpBatch.Columns,
 			},
 		}
+		archiveBatch1 = &memstore.ArchiveBatch{
+			Version: 0,
+			Size:    5,
+			Shard:   shard,
+			Batch: memstore.Batch{
+				RWMutex: &sync.RWMutex{},
+				Columns: tmpBatch1.Columns,
+			},
+		}
 
-		shard.ArchiveStore = memstore.ArchiveStore{CurrentVersion: memstore.NewArchiveStoreVersion(100, shard)}
+		shard.ArchiveStore = &memstore.ArchiveStore{CurrentVersion: memstore.NewArchiveStoreVersion(100, shard)}
 		shard.ArchiveStore.CurrentVersion.Batches[0] = archiveBatch0
 
 		memStore.(*memMocks.MemStore).On("GetTableShard", "table1", 0).Run(func(args mock.Arguments) {
@@ -195,7 +206,7 @@ var _ = ginkgo.Describe("aql_processor", func() {
 		batch101.SafeDestruct()
 		batch99.SafeDestruct()
 		da := getDeviceAllocator()
-		Ω(da.(*deviceAllocatorImpl).memoryUsage[0]).Should(BeEquivalentTo(0))
+		Ω(da.(*memoryTrackingDeviceAllocatorImpl).memoryUsage[0]).Should(BeEquivalentTo(0))
 	})
 
 	ginkgo.It("prefilterSlice", func() {
@@ -386,7 +397,7 @@ var _ = ginkgo.Describe("aql_processor", func() {
 		inputVector = makeConstantInput(int(1), false)
 		Ω(inputVector.Type).Should(Equal(uint32(2)))
 
-		v := &expr.GeopointLiteral{[2]float32{1.1, 2.2}}
+		v := &expr.GeopointLiteral{Val: [2]float32{1.1, 2.2}}
 		inputVector = makeConstantInput(v, false)
 		Ω(inputVector.Type).Should(Equal(uint32(2)))
 	})
@@ -539,8 +550,8 @@ var _ = ginkgo.Describe("aql_processor", func() {
 		initIndexVector(ctx.indexVectorD.getPointer(), 0, ctx.size, stream, 0)
 		ctx.processExpression(exp, nil, tableScanners, foreignTables, stream, 0, ctx.filterAction)
 		Ω(ctx.size).Should(Equal(2))
-		Ω(*(*uint32)(memutils.MemAccess(ctx.indexVectorD.getPointer(), 0))).Should(Equal(uint32(0)))
-		Ω(*(*uint32)(memutils.MemAccess(ctx.indexVectorD.getPointer(), 4))).Should(Equal(uint32(4)))
+		Ω(*(*uint32)(utils.MemAccess(ctx.indexVectorD.getPointer(), 0))).Should(Equal(uint32(0)))
+		Ω(*(*uint32)(utils.MemAccess(ctx.indexVectorD.getPointer(), 4))).Should(Equal(uint32(4)))
 		ctx.cleanupBeforeAggregation()
 		ctx.swapResultBufferForNextBatch()
 	})
@@ -581,7 +592,7 @@ var _ = ginkgo.Describe("aql_processor", func() {
 		initIndexVector(ctx.indexVectorD.getPointer(), 0, ctx.size, stream, 0)
 		ctx.prepareForDimAndMeasureEval(oopkContext.DimRowBytes, 4, oopkContext.NumDimsPerDimWidth, false, stream)
 		valueOffset, nullOffset := queryCom.GetDimensionStartOffsets(oopkContext.NumDimsPerDimWidth, 0, ctx.resultCapacity)
-		dimensionExprRootAction := ctx.makeWriteToDimensionVectorAction(valueOffset, nullOffset)
+		dimensionExprRootAction := ctx.makeWriteToDimensionVectorAction(valueOffset, nullOffset, 0)
 		// vp2
 		exp := &expr.VarRef{
 			Val:      "vp2",
@@ -632,7 +643,7 @@ var _ = ginkgo.Describe("aql_processor", func() {
 		initIndexVector(ctx.indexVectorD.getPointer(), 0, ctx.size, stream, 0)
 		ctx.prepareForDimAndMeasureEval(oopkContext.DimRowBytes, 4, oopkContext.NumDimsPerDimWidth, false, stream)
 		valueOffset, nullOffset := queryCom.GetDimensionStartOffsets(oopkContext.NumDimsPerDimWidth, 0, ctx.resultCapacity)
-		dimensionExprRootAction := ctx.makeWriteToDimensionVectorAction(valueOffset, nullOffset)
+		dimensionExprRootAction := ctx.makeWriteToDimensionVectorAction(valueOffset, nullOffset, 0)
 		// vp2 == 2
 		exp := &expr.BinaryExpr{
 			Op: expr.EQ,
@@ -713,7 +724,7 @@ var _ = ginkgo.Describe("aql_processor", func() {
 		initIndexVector(ctx.indexVectorD.getPointer(), 0, ctx.size, stream, 0)
 		ctx.prepareForDimAndMeasureEval(oopkContext.DimRowBytes, 4, oopkContext.NumDimsPerDimWidth, false, stream)
 		valueOffset, nullOffset := queryCom.GetDimensionStartOffsets(oopkContext.NumDimsPerDimWidth, 0, ctx.resultCapacity)
-		dimensionExprRootAction := ctx.makeWriteToDimensionVectorAction(valueOffset, nullOffset)
+		dimensionExprRootAction := ctx.makeWriteToDimensionVectorAction(valueOffset, nullOffset, 0)
 		ctx.processExpression(exp, nil, tableScanners, foreignTables, stream, 0, dimensionExprRootAction)
 		Ω(*(*[30]uint8)(ctx.dimensionVectorD[0].getPointer())).Should(Equal([30]uint8{0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1}))
 		ctx.cleanupBeforeAggregation()
@@ -781,11 +792,11 @@ var _ = ginkgo.Describe("aql_processor", func() {
 		ctx.processExpression(exp, nil, tableScanners, foreignTables, stream, 0, measureExprRootAction)
 
 		Ω(*(*uint32)(ctx.measureVectorD[0].getPointer())).Should(Equal(uint32(0)))
-		Ω(*(*uint32)(memutils.MemAccess(ctx.measureVectorD[0].getPointer(), 4))).Should(Equal(uint32(1)))
-		Ω(*(*uint32)(memutils.MemAccess(ctx.measureVectorD[0].getPointer(), 8))).Should(Equal(uint32(1)))
-		Ω(*(*uint32)(memutils.MemAccess(ctx.measureVectorD[0].getPointer(), 12))).Should(Equal(uint32(1)))
-		Ω(*(*uint32)(memutils.MemAccess(ctx.measureVectorD[0].getPointer(), 16))).Should(Equal(uint32(0)))
-		Ω(*(*uint32)(memutils.MemAccess(ctx.measureVectorD[0].getPointer(), 20))).Should(Equal(uint32(10)))
+		Ω(*(*uint32)(utils.MemAccess(ctx.measureVectorD[0].getPointer(), 4))).Should(Equal(uint32(1)))
+		Ω(*(*uint32)(utils.MemAccess(ctx.measureVectorD[0].getPointer(), 8))).Should(Equal(uint32(1)))
+		Ω(*(*uint32)(utils.MemAccess(ctx.measureVectorD[0].getPointer(), 12))).Should(Equal(uint32(1)))
+		Ω(*(*uint32)(utils.MemAccess(ctx.measureVectorD[0].getPointer(), 16))).Should(Equal(uint32(0)))
+		Ω(*(*uint32)(utils.MemAccess(ctx.measureVectorD[0].getPointer(), 20))).Should(Equal(uint32(10)))
 		ctx.cleanupBeforeAggregation()
 		ctx.swapResultBufferForNextBatch()
 		ctx.cleanupDeviceResultBuffers()
@@ -818,7 +829,7 @@ var _ = ginkgo.Describe("aql_processor", func() {
 			resultCapacity:   3,
 		}
 
-		batchCtx.sortByKey(numDims, 4, stream, 0)
+		batchCtx.sortByKey(numDims, stream, 0)
 		memutils.AsyncCopyDeviceToHost(unsafe.Pointer(&measureVectorH), measureVectorD.getPointer(), 12, stream, 0)
 		memutils.AsyncCopyDeviceToHost(unsafe.Pointer(&dimIndexVectorH), dimIndexVectorD.getPointer(), 12, stream, 0)
 
@@ -911,8 +922,25 @@ var _ = ginkgo.Describe("aql_processor", func() {
 		dimensionVectorHost := unsafe.Pointer(&dvHost[0])
 		numDims := queryCom.DimCountsPerDimWidth{0, 0, 1, 1, 1}
 		var stream unsafe.Pointer
-		asyncCopyDimensionVector(dimensionVectorHost, ctx.dimensionVectorD[0].getPointer(), ctx.resultSize,
+		asyncCopyDimensionVector(dimensionVectorHost, ctx.dimensionVectorD[0].getPointer(), ctx.resultSize, 0,
 			numDims, ctx.resultSize, ctx.resultCapacity, memutils.AsyncCopyDeviceToHost, stream, 0)
+		Ω(dvHost).Should(Equal(dvHostExpected))
+	})
+
+	ginkgo.It("copy dimension vector with offset should work", func() {
+		dvDevice := [40]uint8{2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 1, 0, 0, 0, 0, 0, 2, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0}
+		dvHostExpected := [40]uint8{0, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 1, 0, 0, 0, 0, 2, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0}
+		ctx := oopkBatchContext{
+			dimensionVectorD: [2]devicePointer{{pointer: unsafe.Pointer(&dvDevice[0])}, nullDevicePointer},
+			resultSize:       2,
+			resultCapacity:   4,
+		}
+		dvHost := [40]uint8{}
+		dimensionVectorHost := unsafe.Pointer(&dvHost[0])
+		numDims := queryCom.DimCountsPerDimWidth{0, 0, 1, 1, 1}
+		var stream unsafe.Pointer
+		asyncCopyDimensionVector(dimensionVectorHost, ctx.dimensionVectorD[0].getPointer(), ctx.resultSize, 1,
+			numDims, ctx.resultCapacity, ctx.resultCapacity, memutils.AsyncCopyDeviceToHost, stream, 0)
 		Ω(dvHost).Should(Equal(dvHostExpected))
 	})
 
@@ -928,13 +956,13 @@ var _ = ginkgo.Describe("aql_processor", func() {
 
 		utils.Init(common.AresServerConfig{Query: common.QueryConfig{TimezoneTable: common.TimezoneConfig{
 			TableName: "tableName",
-		}}}, common.NewLoggerFactory().GetDefaultLogger().Sugar(), common.NewLoggerFactory().GetDefaultLogger().Sugar(), tally.NewTestScope("test", nil))
+		}}}, common.NewLoggerFactory().GetDefaultLogger(), common.NewLoggerFactory().GetDefaultLogger(), tally.NewTestScope("test", nil))
 		qc := &AQLQueryContext{
 			timezoneTable: timezoneTableContext{tableColumn: "timezone"},
 		}
 		qc.prepareTimezoneTable(memStore)
 		Ω(qc.Error).Should(BeNil())
-		Ω(da.(*deviceAllocatorImpl).memoryUsage[0]).Should(BeEquivalentTo(2))
+		Ω(da.(*memoryTrackingDeviceAllocatorImpl).memoryUsage[0]).Should(BeEquivalentTo(2))
 		deviceFreeAndSetNil(&qc.OOPK.currentBatch.timezoneLookupD)
 		utils.ResetDefaults()
 	})
@@ -959,9 +987,17 @@ var _ = ginkgo.Describe("aql_processor", func() {
 
 		qc = q.Compile(memStore, false)
 		Ω(qc.Error).Should(BeNil())
+		qc.FindDeviceForQuery(memStore, -1, NewDeviceManager(common.QueryConfig{
+			DeviceMemoryUtilization: 1.0,
+			DeviceChoosingTimeout:   -1,
+		}), 100)
+		Ω(qc.Device).Should(Equal(0))
+		memStore.(*memMocks.MemStore).On("GetTableShard", "table1", 0).Run(func(args mock.Arguments) {
+			shard.Users.Add(1)
+		}).Return(shard, nil).Once()
 		qc.ProcessQuery(memStore)
 		Ω(qc.Error).Should(BeNil())
-		qc.Results = qc.Postprocess()
+		qc.Postprocess()
 		qc.ReleaseHostResultsBuffers()
 		bs, err := json.Marshal(qc.Results)
 		Ω(err).Should(BeNil())
@@ -1136,7 +1172,7 @@ var _ = ginkgo.Describe("aql_processor", func() {
 
 		utils.Init(common.AresServerConfig{Query: common.QueryConfig{TimezoneTable: common.TimezoneConfig{
 			TableName: timezoneTable,
-		}}}, common.NewLoggerFactory().GetDefaultLogger().Sugar(), common.NewLoggerFactory().GetDefaultLogger().Sugar(), tally.NewTestScope("test", nil))
+		}}}, common.NewLoggerFactory().GetDefaultLogger(), common.NewLoggerFactory().GetDefaultLogger(), tally.NewTestScope("test", nil))
 
 		qc := &AQLQueryContext{}
 		q := &AQLQuery{
@@ -1162,7 +1198,7 @@ var _ = ginkgo.Describe("aql_processor", func() {
 		qc.ProcessQuery(memStore)
 		Ω(qc.Error).Should(BeNil())
 		Ω(qc.OOPK.currentBatch.timezoneLookupDSize).Should(Equal(3))
-		qc.Results = qc.Postprocess()
+		qc.Postprocess()
 		qc.ReleaseHostResultsBuffers()
 		bs, err := json.Marshal(qc.Results)
 		Ω(err).Should(BeNil())
@@ -1186,22 +1222,6 @@ var _ = ginkgo.Describe("aql_processor", func() {
 		Ω(dimValResVectorSize(3, queryCom.DimCountsPerDimWidth{0, 0, 0, 1, 0})).Should(Equal(9))
 		Ω(dimValResVectorSize(3, queryCom.DimCountsPerDimWidth{0, 0, 0, 0, 1})).Should(Equal(6))
 		Ω(dimValResVectorSize(0, queryCom.DimCountsPerDimWidth{0, 0, 1, 1, 1})).Should(Equal(0))
-	})
-
-	ginkgo.It("doCGoCall should work", func() {
-		batchCtx := oopkBatchContext{size: 10}
-		err := func() (err error) {
-			defer func() {
-				r := recover()
-				if r != nil {
-					err, _ = r.(error)
-				}
-			}()
-			batchCtx.sortByKey(queryCom.DimCountsPerDimWidth{}, 20, unsafe.Pointer(nil), 0)
-			return
-		}()
-		Ω(err).ShouldNot(BeNil())
-		Ω(err.Error()).Should(ContainSubstring("ValueBytes is invalid"))
 	})
 
 	ginkgo.It("getGeoShapeLatLongSlice", func() {
@@ -1287,7 +1307,7 @@ var _ = ginkgo.Describe("aql_processor", func() {
 
 		tripsTableShard := &memstore.TableShard{
 			Schema: tripsSchema,
-			ArchiveStore: memstore.ArchiveStore{
+			ArchiveStore: &memstore.ArchiveStore{
 				CurrentVersion: memstore.NewArchiveStoreVersion(0, shard),
 			},
 			LiveStore: &memstore.LiveStore{
@@ -1374,8 +1394,7 @@ var _ = ginkgo.Describe("aql_processor", func() {
 			uuidValue, _ := memCom.ValueFromString(shapeUUIDs[i], memCom.UUID)
 			shapeUUIDLiveVP.SetDataValue(i, uuidValue, memstore.IgnoreCount)
 			shapeLiveVP.SetDataValue(i, memCom.DataValue{Valid: true, GoVal: &shapes[i]}, memstore.IgnoreCount)
-			key := make([]byte, 16)
-			err := memstore.GetPrimaryKeyBytes([]memCom.DataValue{uuidValue}, key)
+			key, err := memstore.GetPrimaryKeyBytes([]memCom.DataValue{uuidValue}, 16)
 			Ω(err).Should(BeNil())
 			geoFenceLiveStore.PrimaryKey.FindOrInsert(
 				key,
@@ -1503,11 +1522,13 @@ var _ = ginkgo.Describe("aql_processor", func() {
 					dimIndex:      -1,
 				},
 			},
+			fromTime: &alignedTime{time.Unix(0, 0), "s"},
+			toTime:   &alignedTime{time.Unix(86400, 0), "s"},
 		}
 
 		qc.ProcessQuery(mockMemStore)
 		Ω(qc.Error).Should(BeNil())
-		qc.Results = qc.Postprocess()
+		qc.Postprocess()
 		Ω(qc.Error).Should(BeNil())
 		bs, err := json.Marshal(qc.Results)
 		Ω(err).Should(BeNil())
@@ -1554,7 +1575,7 @@ var _ = ginkgo.Describe("aql_processor", func() {
 
 		tripsTableShard := &memstore.TableShard{
 			Schema: tripsSchema,
-			ArchiveStore: memstore.ArchiveStore{
+			ArchiveStore: &memstore.ArchiveStore{
 				CurrentVersion: memstore.NewArchiveStoreVersion(0, shard),
 			},
 			LiveStore: &memstore.LiveStore{
@@ -1641,8 +1662,7 @@ var _ = ginkgo.Describe("aql_processor", func() {
 			uuidValue, _ := memCom.ValueFromString(shapeUUIDs[i], memCom.UUID)
 			shapeUUIDLiveVP.SetDataValue(i, uuidValue, memstore.IgnoreCount)
 			shapeLiveVP.SetDataValue(i, memCom.DataValue{Valid: true, GoVal: &shapes[i]}, memstore.IgnoreCount)
-			key := make([]byte, 16)
-			err := memstore.GetPrimaryKeyBytes([]memCom.DataValue{uuidValue}, key)
+			key, err := memstore.GetPrimaryKeyBytes([]memCom.DataValue{uuidValue}, 16)
 			Ω(err).Should(BeNil())
 			geoFenceLiveStore.PrimaryKey.FindOrInsert(
 				key,
@@ -1778,11 +1798,13 @@ var _ = ginkgo.Describe("aql_processor", func() {
 					inOrOut:       true,
 				},
 			},
+			fromTime: &alignedTime{time.Unix(0, 0), "s"},
+			toTime:   &alignedTime{time.Unix(86400, 0), "s"},
 		}
 
 		qc.ProcessQuery(mockMemStore)
 		Ω(qc.Error).Should(BeNil())
-		qc.Results = qc.Postprocess()
+		qc.Postprocess()
 		Ω(qc.Error).Should(BeNil())
 		bs, err := json.Marshal(qc.Results)
 		Ω(err).Should(BeNil())
@@ -1943,7 +1965,7 @@ var _ = ginkgo.Describe("aql_processor", func() {
 
 		tripsTableShard := &memstore.TableShard{
 			Schema: tripsSchema,
-			ArchiveStore: memstore.ArchiveStore{
+			ArchiveStore: &memstore.ArchiveStore{
 				CurrentVersion: memstore.NewArchiveStoreVersion(0, shard),
 			},
 			LiveStore: &memstore.LiveStore{
@@ -2029,11 +2051,13 @@ var _ = ginkgo.Describe("aql_processor", func() {
 					ExprType: expr.Unsigned,
 				},
 			},
+			fromTime: &alignedTime{time.Unix(0, 0), "s"},
+			toTime:   &alignedTime{time.Unix(86400, 0), "s"},
 		}
 
 		qc.ProcessQuery(mockMemStore)
 		Ω(qc.Error).Should(BeNil())
-		qc.Results = qc.Postprocess()
+		qc.Postprocess()
 		Ω(qc.Error).Should(BeNil())
 		bs, err := json.Marshal(qc.Results)
 		Ω(err).Should(BeNil())
@@ -2043,5 +2067,147 @@ var _ = ginkgo.Describe("aql_processor", func() {
 			}`,
 		))
 		qc.ReleaseHostResultsBuffers()
+	})
+
+	ginkgo.It("ProcessQuery for non-aggregation query should work", func() {
+		shard.ArchiveStore.CurrentVersion.Batches[0] = archiveBatch1
+		qc := &AQLQueryContext{}
+		q := &AQLQuery{
+			Table: table,
+			Dimensions: []Dimension{
+				{Expr: "c0"},
+				{Expr: "c1"},
+				{Expr: "c2"},
+			},
+			Measures: []Measure{
+				{Expr: "1"},
+			},
+			TimeFilter: TimeFilter{
+				Column: "c0",
+				From:   "1970-01-01",
+				To:     "1970-01-02",
+			},
+			Limit: 20,
+		}
+		qc.Query = q
+
+		qc = q.Compile(memStore, false)
+		Ω(qc.Error).Should(BeNil())
+		qc.calculateMemoryRequirement(memStore)
+		memStore.(*memMocks.MemStore).On("GetTableShard", "table1", 0).Run(func(args mock.Arguments) {
+			shard.Users.Add(1)
+		}).Return(shard, nil).Once()
+		qc.ProcessQuery(memStore)
+		Ω(qc.Error).Should(BeNil())
+
+		qc.Postprocess()
+		qc.ReleaseHostResultsBuffers()
+		bs, err := json.Marshal(qc.Results)
+		Ω(err).Should(BeNil())
+
+		Ω(bs).Should(MatchJSON(` {
+			"headers": ["c0", "c1", "c2"],
+			"matrixData": [
+				["100", "0", "1"],
+          		["110", "1", "NULL" ],
+          		["120", "NULL", "1.2"],
+          		["130", "0", "1.3"],
+          		["100", "0", "NULL"],
+          		["110", "1", "1.1"],
+          		["120", "0", "1.2"],
+          		["0", "NULL", "NULL"],
+          		["10", "NULL", "1.1"],
+          		["20", "NULL", "1.2"],
+          		["30", "0", "1.3"],
+          		["40", "1", "NULL"]
+			]
+		  }`))
+
+		bc := qc.OOPK.currentBatch
+		// Check whether pointers are properly cleaned up.
+		Ω(len(qc.OOPK.foreignTables)).Should(BeZero())
+		Ω(qc.cudaStreams[0]).Should(BeZero())
+		Ω(qc.cudaStreams[1]).Should(BeZero())
+
+		Ω(bc.dimensionVectorD[0]).Should(BeZero())
+		Ω(bc.dimensionVectorD[1]).Should(BeZero())
+
+		Ω(bc.dimIndexVectorD[0]).Should(BeZero())
+		Ω(bc.dimIndexVectorD[1]).Should(BeZero())
+
+		Ω(bc.hashVectorD[0]).Should(BeZero())
+		Ω(bc.hashVectorD[1]).Should(BeZero())
+
+		Ω(bc.measureVectorD[0]).Should(BeZero())
+		Ω(bc.measureVectorD[1]).Should(BeZero())
+
+		Ω(bc.resultSize).Should(BeZero())
+		Ω(bc.resultCapacity).Should(BeZero())
+
+		Ω(len(bc.columns)).Should(BeZero())
+
+		Ω(bc.indexVectorD).Should(BeZero())
+		Ω(bc.predicateVectorD).Should(BeZero())
+
+		Ω(bc.size).Should(BeZero())
+
+		Ω(len(bc.foreignTableRecordIDsD)).Should(BeZero())
+		Ω(len(bc.exprStackD)).Should(BeZero())
+
+		Ω(qc.OOPK.measureVectorH).Should(BeZero())
+		Ω(qc.OOPK.dimensionVectorH).Should(BeZero())
+
+		Ω(qc.OOPK.hllVectorD).Should(BeZero())
+		Ω(qc.OOPK.hllDimRegIDCountD).Should(BeZero())
+	})
+
+	ginkgo.It("ProcessQuery should work for query without regular filters", func() {
+		shard.ArchiveStore.CurrentVersion.Batches[0] = archiveBatch1
+		qc := &AQLQueryContext{}
+		q := &AQLQuery{
+			Table: table,
+			Dimensions: []Dimension{
+				{Expr: "0"},
+			},
+			Measures: []Measure{
+				{Expr: "count(*)"},
+			},
+			TimeFilter: TimeFilter{
+				Column: "c0",
+				From:   "1970-01-01",
+				To:     "1970-01-02",
+			},
+		}
+		qc.Query = q
+		qc = q.Compile(memStore, false)
+		Ω(qc.Error).Should(BeNil())
+		qc.ProcessQuery(memStore)
+		Ω(qc.Error).Should(BeNil())
+
+		qc.Postprocess()
+		qc.ReleaseHostResultsBuffers()
+		bs, err := json.Marshal(qc.Results)
+		Ω(err).Should(BeNil())
+
+		Ω(bs).Should(MatchJSON(` {
+			"0": 12
+		  }`))
+	})
+
+	ginkgo.It("initializeNonAggResponse should work", func() {
+		qc := &AQLQueryContext{
+			Query: &AQLQuery{
+				Dimensions: []Dimension{
+					{Expr: "foo"},
+				},
+			},
+		}
+		qc.isNonAggregationQuery = true
+
+		w := httptest.NewRecorder()
+		qc.ResponseWriter = w
+
+		qc.initializeNonAggResponse()
+		Ω(w.Body.String()).Should(Equal(`{"results":[{"headers":["foo"],"matrixData":[`))
 	})
 })

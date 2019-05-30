@@ -18,7 +18,7 @@ Getting started
 To get AresDB:
 
 ```
-git clone git@github.com:uber/aresdb $GOPATH/src/github.com/uber/aresdb
+git clone --recursive https://github.com/uber/aresdb.git $GOPATH/src/github.com/uber/aresdb
 ```
 
 NVIDIA Driver and CUDA Setup
@@ -31,6 +31,7 @@ Run the following to make sure the following environment variables are correctly
 ```
 export PATH=/path/to/cuda/bin:${PATH}
 export LD_LIBRARY_PATH=/path/to/cuda/lib64:/path/to/aresdb/lib:${LD_LIBRARY_PATH}
+export PKG_CONFIG_PATH=${LD_LIBRARY_PATH}/pkgconfig:${PKG_CONFIG_PATH}
 ```
 
 
@@ -38,7 +39,8 @@ Language Requirements
 ---------------------
 Building and running AresDB requires:
 * [golang](https://golang.org/) 1.9+
-* C++ compiler that support c++11
+* C++ compiler that support c++14
+* [cmake](https://cmake.org/download/) 3.12+
 * [nvcc](https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html) version 9.1
 
 Build
@@ -47,17 +49,22 @@ The following dependencies need to be installed before building the binary.
 
 ### glide
 We use [glide](https://glide.sh) to manage Go dependencies. Please make sure `glide` is in your PATH before you attempt to build.
-
 ###
+
+Run following commands to generate makefile:
+```
+cmake .
+```
+
 
 Local Test
 ----------
-AresDB is written in C++ (query engine) and Golang (mem store, disk store, disk store and other query components). Because of this, we break testing into two parts:
+AresDB is written in C++ (query engine) and Golang (mem store, disk store and other query components). Because of this, we break testing into two parts:
 ### Test Golang Code
 #### Ginkgo
 We use [Ginkgo](https://github.com/onsi/ginkgo) as the test framework for running the Golang unit test and coverage. Install Ginkgo first and run
 ```
-make test
+make test-golang
 ```
 
 ### Test C++ Code
@@ -73,12 +80,12 @@ Run AresDB Server
 -----------------
 The following command will start an AresDB server locally. You can start to query the server using a curl command or [swagger](https://github.com/uber/aresdb/wiki/Swagger) page.
 ```
-make run
+make run_server
 ```
 
 Run AresDB Docker
 -----------------
-Please read the [Docker](docs/docker.md) page.
+Please read the [Docker](docker/README.md) page.
 
 Documentation
 --------------

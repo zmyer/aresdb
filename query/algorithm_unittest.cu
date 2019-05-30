@@ -267,44 +267,6 @@ TEST(UnaryTransformTest, CheckDimensionOutputIterator) {
 }
 
 // cppcheck-suppress *
-TEST(UnaryTransformTest, CheckGeoPoint) {
-  const int size = 3;
-  uint32_t indexVectorH[size * 2] = {0, 1, 2};
-  GeoPointT lhsValuesH[size] = {{1, 1}, {1, 0}, {0, 0}};
-  // T T F
-  uint8_t lhsNullsH[1 + ((size - 1) / 8)] = {0x03};
-
-  uint8_t *inputBasePtr =
-      allocate_column(nullptr, &lhsNullsH[0], &lhsValuesH[0], 0, 1, 24);
-
-  int outputValuesH[size] = {false, false, false};
-  bool outputNullsH[size] = {false, false, false};
-  uint8_t *outputBasePtr =
-      allocate_column(nullptr, reinterpret_cast<uint8_t *>(&outputValuesH[0]),
-                      &outputNullsH[0], 0, 12, 3);
-
-  uint32_t *indexVector = allocate(&indexVectorH[0], size * 2);
-
-  DefaultValue defaultValue = {false, {.Int32Val = 0}};
-  VectorPartySlice
-      inputColumn = {inputBasePtr, 0, 8, 0, GeoPoint, defaultValue};
-  ScratchSpaceVector outputScratchSpace = {outputBasePtr, 3, Int32};
-
-  InputVector input = {{.VP = inputColumn}, VectorPartyInput};
-  OutputVector output = {{.ScratchSpace = outputScratchSpace},
-                         ScratchSpaceOutput};
-
-  CGoCallResHandle resHandle = {0, nullptr};
-  resHandle = UnaryTransform(input, output, indexVector, size, nullptr, 0,
-      Negate, 0, 0);
-  EXPECT_TRUE(resHandle.pStrErr != nullptr);
-  free(const_cast<char *>(resHandle.pStrErr));
-  release(inputBasePtr);
-  release(outputBasePtr);
-  release(indexVector);
-}
-
-// cppcheck-suppress *
 TEST(UnaryFilterTest, CheckFilter) {
   const int size = 3;
   uint32_t indexVectorH[size] = {0, 1, 2};
@@ -1027,12 +989,10 @@ TEST(SortDimColumnVectorTest, CheckSort) {
   (keysH + 18)[2] = 1;
 
   uint32_t indexH[3] = {0, 1, 2};
-  uint32_t valuesH[3] = {1, 2, 3};
   uint64_t hashValuesH[3] = {0};
 
   uint8_t *keys = allocate(&keysH[0], 30);
   uint32_t *index = allocate(&indexH[0], 3);
-  uint32_t *values = allocate(&valuesH[0], 3);
   uint64_t *hashValues = allocate(&hashValuesH[0], 3);
 
   const int vectorCapacity = 3;
@@ -1043,13 +1003,10 @@ TEST(SortDimColumnVectorTest, CheckSort) {
       index,
       vectorCapacity,
       {(uint8_t)0, (uint8_t)0, (uint8_t)1, (uint8_t)1, (uint8_t)1}};
-  Sort(keyColVector, reinterpret_cast<uint8_t *>(values), 4, length,
-       0, 0);
+  Sort(keyColVector, length, 0, 0);
 
-  uint32_t expectedValues[3] = {1, 2, 3};
   uint32_t expectedIndex1[3] = {1, 0, 2};
   uint32_t expectedIndex2[3] = {0, 2, 1};
-  EXPECT_TRUE(equal(values, values + 3, expectedValues));
   EXPECT_TRUE(equal(index, index + 3, expectedIndex1) ||
       equal(index, index + 3, expectedIndex2));
 }
@@ -1236,8 +1193,7 @@ TEST(SortAndReduceTest, CheckHash) {
       vectorCapacity,
       {(uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)1}};
 
-  Sort(inputKeyColVector, reinterpret_cast<uint8_t *>(measureValues), 4, length,
-       0, 0);
+  Sort(inputKeyColVector, length, 0, 0);
   CGoCallResHandle resHandle =
       Reduce(inputKeyColVector, reinterpret_cast<uint8_t *>(measureValues),
              outputKeyColVector, reinterpret_cast<uint8_t *>(measureValuesOut),
@@ -1782,4 +1738,210 @@ TEST(GeoBatchIntersectionJoinTest, DimensionWriting) {
   release(basePtr);
   release(geoShapes);
 }
+
+TEST(ExpandTest, testOverFill) {
+    // test with 3 dimensions (4-byte, 2-byte, 1-byte)
+    // each dimension vector has 6 elements with values assigned as
+    // [1,2,3,2,3,1]
+    uint8_t inputDimValuesH[60] = {
+        1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0,
+        1, 0, 2, 0, 3, 0, 2, 0, 3, 0, 1, 0,
+        1, 2, 3, 2, 3, 1, 1,
+        1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1
+    };
+    uint32_t inputIndexVectorH[6] = {1, 2, 4, 7, 9, 12};
+    uint32_t baseCountVectorH[16] = {
+        0, 0, 1, 3, 4, 7, 8, 10, 13, 14, 16, 19, 22, 23, 26, 30
+    };
+    // => counts{1, 2, 3, 3, 2, 1}
+    // so normal result will be {1, 2, 2, 3, 3, 3, 2, 2, 2, 3, 3, 1}
+    // and only cut first 10 elem
+
+    uint8_t outputDimValuesH[100] = {0};
+    uint8_t expectedDimValues[100] = {
+        1, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0,
+        3, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0,
+        1, 0, 2, 0, 2, 0, 3, 0, 3, 0, 3, 0, 2, 0, 2, 0, 2, 0, 3, 0,
+        1, 2, 2, 3, 3, 3, 2, 2, 2, 3,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    };
+
+    uint8_t *inputDimValues = allocate(inputDimValuesH, 60);
+    uint32_t *inputIndexVector = allocate(inputIndexVectorH, 6);
+    uint32_t *baseCountVector = allocate(baseCountVectorH, 16);
+
+    uint8_t *outputDimValues = allocate(outputDimValuesH, 100);
+
+    int length = 6;
+    int vectorCapacity = 6;
+    DimensionColumnVector inputKeys = {
+        inputDimValues,
+        NULL,
+        NULL,
+        vectorCapacity,
+        {(uint8_t)0, (uint8_t)0, (uint8_t)1, (uint8_t)1, (uint8_t)1}};
+    int outCapacity =  10;
+
+    DimensionColumnVector outputKeys = {
+        outputDimValues,
+        NULL,
+        NULL,
+        outCapacity,
+        {(uint8_t)0, (uint8_t)0, (uint8_t)1, (uint8_t)1, (uint8_t)1}};
+    CGoCallResHandle
+        resHandle = Expand(inputKeys,
+                           outputKeys,
+                           baseCountVector,
+                           inputIndexVector,
+                           length,
+                           0,
+                           0,
+                           0);
+    EXPECT_EQ(reinterpret_cast<int64_t>(resHandle.res), 10);
+    EXPECT_EQ(resHandle.pStrErr, nullptr);
+    EXPECT_TRUE(equal(outputDimValues, outputDimValues + 100,
+                        expectedDimValues));
+}
+
+TEST(ExpandTest, testAppend) {
+    // test with 3 dimensions (4-byte, 2-byte, 1-byte)
+    // each dimension vector has 6 elements with values assigned as
+    // [1,2,3,2,3,1]
+    uint8_t inputDimValuesH[60] = {
+        1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0,
+        1, 0, 2, 0, 3, 0, 2, 0, 3, 0, 1, 0,
+        1, 2, 3, 2, 3, 1, 1,
+        1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1
+    };
+    uint32_t inputIndexVectorH[6] = {1, 2, 4, 7, 9, 12};
+    uint32_t baseCountVectorH[16] = {
+        0, 0, 1, 3, 4, 7, 8, 10, 13, 14, 16, 19, 22, 23, 26, 30
+    };
+    // => counts{1, 2, 3, 3, 2, 1}
+    // so normal result will be {1, 2, 2, 3, 3, 3, 2, 2, 2, 3, 3, 1}
+    // and only append the first 5 elem to the last 5 elem of output
+
+    uint8_t outputDimValuesH[100] = {0};
+    uint8_t expectedDimValues[100] = {
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        1, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 2, 0, 2, 0, 3, 0, 3, 0,
+        0, 0, 0, 0, 0, 1, 2, 2, 3, 3,
+        0, 0, 0, 0, 0, 1, 1, 1, 1, 1,
+        0, 0, 0, 0, 0, 1, 1, 1, 1, 1,
+        0, 0, 0, 0, 0, 1, 1, 1, 1, 1,
+    };
+
+    uint8_t *inputDimValues = allocate(inputDimValuesH, 60);
+    uint32_t *inputIndexVector = allocate(inputIndexVectorH, 6);
+    uint32_t *baseCountVector = allocate(baseCountVectorH, 16);
+
+    uint8_t *outputDimValues = allocate(outputDimValuesH, 100);
+
+    int length = 6;
+    int vectorCapacity = 6;
+    int outCapacity =  10;
+
+    DimensionColumnVector inputKeys = {
+        inputDimValues,
+        NULL,
+        NULL,
+        vectorCapacity,
+        {(uint8_t)0, (uint8_t)0, (uint8_t)1, (uint8_t)1, (uint8_t)1}};
+
+    DimensionColumnVector outputKeys = {
+        outputDimValues,
+        NULL,
+        NULL,
+        outCapacity,
+        {(uint8_t)0, (uint8_t)0, (uint8_t)1, (uint8_t)1, (uint8_t)1}};
+    CGoCallResHandle
+        resHandle = Expand(inputKeys,
+                           outputKeys,
+                           baseCountVector,
+                           inputIndexVector,
+                           length,
+                           5,
+                           0,
+                           0);
+    EXPECT_EQ(reinterpret_cast<int64_t>(resHandle.res), 10);
+    EXPECT_EQ(resHandle.pStrErr, nullptr);
+    EXPECT_TRUE(equal(outputDimValues, outputDimValues + 100,
+                        expectedDimValues));
+}
+
+TEST(ExpandTest, testFillPartial) {
+    // test with 3 dimensions (4-byte, 2-byte, 1-byte)
+    // each dimension vector has 6 elements with values assigned as
+    // [1,2,3,2,3,1]
+    uint8_t inputDimValuesH[60] = {
+        1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0,
+        1, 0, 2, 0, 3, 0, 2, 0, 3, 0, 1, 0,
+        1, 2, 3, 2, 3, 1, 1,
+        1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1
+    };
+    uint32_t inputIndexVectorH[6] = {1, 2, 4};
+    uint32_t baseCountVectorH[16] = {
+        0, 0, 1, 3, 4, 7, 8, 10, 13, 14, 16, 19, 22, 23, 26, 30
+    };
+    // => counts{1, 2, 3}
+    // so normal result will be {1, 2, 2, 3, 3, 3}
+    // and only cut first 10 elem
+
+    uint8_t outputDimValuesH[100] = {0};
+    uint8_t expectedDimValues[100] = {
+        1, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0,
+        3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        1, 0, 2, 0, 2, 0, 3, 0, 3, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        1, 2, 2, 3, 3, 3, 0, 0, 0, 0,
+        1, 1, 1, 1, 1, 1, 0, 0, 0, 0,
+        1, 1, 1, 1, 1, 1, 0, 0, 0, 0,
+        1, 1, 1, 1, 1, 1, 0, 0, 0, 0
+    };
+
+    uint8_t *inputDimValues = allocate(inputDimValuesH, 60);
+    uint32_t *inputIndexVector = allocate(inputIndexVectorH, 6);
+    uint32_t *baseCountVector = allocate(baseCountVectorH, 16);
+
+    uint8_t *outputDimValues = allocate(outputDimValuesH, 100);
+
+    int length = 3;
+    int vectorCapacity = 6;
+    DimensionColumnVector inputKeys = {
+        inputDimValues,
+        NULL,
+        NULL,
+        vectorCapacity,
+        {(uint8_t)0, (uint8_t)0, (uint8_t)1, (uint8_t)1, (uint8_t)1}};
+    int outCapacity =  10;
+
+    DimensionColumnVector outputKeys = {
+        outputDimValues,
+        NULL,
+        NULL,
+        outCapacity,
+        {(uint8_t)0, (uint8_t)0, (uint8_t)1, (uint8_t)1, (uint8_t)1}};
+    CGoCallResHandle
+        resHandle = Expand(inputKeys,
+                           outputKeys,
+                           baseCountVector,
+                           inputIndexVector,
+                           length,
+                           0,
+                           0,
+                           0);
+    EXPECT_EQ(reinterpret_cast<int64_t>(resHandle.res), 6);
+    EXPECT_EQ(resHandle.pStrErr, nullptr);
+    EXPECT_TRUE(equal(outputDimValues, outputDimValues + 100,
+                        expectedDimValues));
+}
+
 }  // namespace ares

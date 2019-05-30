@@ -29,8 +29,8 @@ func (shard *TableShard) ReplayRedoLogs() {
 	timer := utils.GetReporter(shard.Schema.Schema.Name, shard.ShardID).GetTimer(utils.RecoveryLatency).Start()
 	defer timer.Stop()
 
-	utils.GetLogger().Infof("Replay redo logs for Shard %d of table %s",
-		shard.ShardID, shard.Schema.Schema.Name)
+	utils.GetLogger().With("table", shard.Schema.Schema.Name, "shard", shard.ShardID).Info(
+		"Replay redo logs")
 
 	var redoLogFilePersisted int64
 	var offsetPersisted uint32
@@ -40,7 +40,8 @@ func (shard *TableShard) ReplayRedoLogs() {
 	} else {
 		redoLogFilePersisted, offsetPersisted, _, _ = shard.LiveStore.SnapshotManager.GetLastSnapshotInfo()
 	}
-	utils.GetLogger().Infof("Checkpointed redoLogFile=%d offset=%d", redoLogFilePersisted, offsetPersisted)
+	utils.GetLogger().With("table", shard.Schema.Schema.Name, "shard", shard.ShardID, "redoLogFile",
+		redoLogFilePersisted, "offset", offsetPersisted).Info("Checkpointed redolog file")
 
 	// Replay redo logs to create LiveStore.
 	nextUpsertBatch := shard.LiveStore.RedoLogManager.NextUpsertBatch()
@@ -60,7 +61,6 @@ func (shard *TableShard) ReplayRedoLogs() {
 		// check if this batch has already been backfilled and persisted
 		skipBackfillRows := redoLogFile < redoLogFilePersisted ||
 			(redoLogFile == redoLogFilePersisted && offset <= offsetPersisted)
-
 		_, err := shard.ApplyUpsertBatch(upsertBatch, redoLogFile, offset, skipBackfillRows)
 
 		shard.LiveStore.WriterLock.Unlock()
@@ -71,20 +71,20 @@ func (shard *TableShard) ReplayRedoLogs() {
 	}
 
 	// report redolog size after replay
-	utils.GetReporter(shard.Schema.Schema.Name, shard.ShardID).GetGauge(utils.NumberOfRedologs).Update(float64(len(shard.LiveStore.RedoLogManager.SizePerFile)))
-	utils.GetReporter(shard.Schema.Schema.Name, shard.ShardID).GetGauge(utils.SizeOfRedologs).Update(float64(shard.LiveStore.RedoLogManager.TotalRedoLogSize))
+	utils.GetReporter(shard.Schema.Schema.Name, shard.ShardID).GetGauge(utils.NumberOfRedologs).Update(float64(shard.LiveStore.RedoLogManager.GetNumFiles()))
+	utils.GetReporter(shard.Schema.Schema.Name, shard.ShardID).GetGauge(utils.SizeOfRedologs).Update(float64(shard.LiveStore.RedoLogManager.GetTotalSize()))
 
 	// proactively purge redo files
 	if shard.LiveStore.BackfillManager != nil {
 		shard.LiveStore.RedoLogManager.
-			PurgeRedologFileAndData(shard.LiveStore.ArchivingCutoffHighWatermark, redoLogFilePersisted, offsetPersisted)
+			CheckpointRedolog(shard.LiveStore.ArchivingCutoffHighWatermark, redoLogFilePersisted, offsetPersisted)
 	}
 }
 
 func (shard *TableShard) cleanOldSnapshotAndLogs(redoLogFile int64, offset uint32) {
 	tableName := shard.Schema.Schema.Name
 	// snapshot won't care about the cutoff.
-	if err := shard.LiveStore.RedoLogManager.PurgeRedologFileAndData(math.MaxUint32, redoLogFile, offset); err != nil {
+	if err := shard.LiveStore.RedoLogManager.CheckpointRedolog(math.MaxUint32, redoLogFile, offset); err != nil {
 		utils.GetLogger().With(
 			"job", "snapshot_cleanup",
 			"table", tableName).Errorf(
@@ -227,13 +227,21 @@ func (m *memStoreImpl) InitShards(schedulerOff bool) {
 	// the backfill queue.
 	if !schedulerOff {
 		// Start scheduler.
-		utils.GetLogger().Infof("Starting archiving scheduler")
+		utils.GetLogger().Info("Starting archiving scheduler")
+		// disable archiving during redolog replay
+		m.GetScheduler().EnableJobType(memcom.ArchivingJobType, false)
+		// this will start scheduler of all jobs except archiving, archiving will be started individually
 		m.GetScheduler().Start()
 	} else {
-		utils.GetLogger().Infof("Scheduler is off")
+		utils.GetLogger().Info("Scheduler is off")
 	}
 
 	m.replayRedoLogs()
+
+	if !schedulerOff {
+		// re-enable archiving after redolog replay
+		m.GetScheduler().EnableJobType(memcom.ArchivingJobType, true)
+	}
 
 	// watch Shard ownership change
 	shardOwnershipChangeEvents, done, err := m.metaStore.WatchShardOwnershipEvents()
@@ -421,7 +429,8 @@ func (shard *TableShard) rebuildIndexForLiveStore(batchID int32, lastRecord uint
 	batch := shard.LiveStore.Batches[batchID]
 	primaryKeyBytes := shard.Schema.PrimaryKeyBytes
 	primaryKeyColumns := shard.Schema.GetPrimaryKeyColumns()
-	key := make([]byte, primaryKeyBytes)
+	var key []byte
+	var err error
 	primaryKeyValues := make([]memcom.DataValue, len(primaryKeyColumns))
 
 	var row uint32
@@ -429,7 +438,7 @@ func (shard *TableShard) rebuildIndexForLiveStore(batchID int32, lastRecord uint
 		for i, col := range primaryKeyColumns {
 			primaryKeyValues[i] = batch.Columns[col].GetDataValue(int(row))
 		}
-		if err := GetPrimaryKeyBytes(primaryKeyValues, key); err != nil {
+		if key, err = GetPrimaryKeyBytes(primaryKeyValues, primaryKeyBytes); err != nil {
 			return err
 		}
 		recordID := RecordID{

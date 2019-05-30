@@ -59,17 +59,8 @@ class TransformContext {
     typedef typename OutputIterator::value_type::head_type OutputValueType;
 
     UnaryFunctor<OutputValueType, InputValueType> f(functorType);
-
-#ifdef RUN_ON_DEVICE
-    return thrust::transform(thrust::cuda::par.on(cudaStream), inputIter,
+    return thrust::transform(GET_EXECUTION_POLICY(cudaStream), inputIter,
         inputIter + indexVectorLength, outputIter, f) - outputIter;
-#else
-    return thrust::transform(thrust::host,
-                             inputIter,
-                             inputIter + indexVectorLength,
-                             outputIter,
-                             f) - outputIter;
-#endif
   }
 
   template<typename LHSIterator, typename RHSIterator>
@@ -82,13 +73,8 @@ class TransformContext {
 
     BinaryFunctor<OutputValueType, InputValueType> f(functorType);
 
-#ifdef RUN_ON_DEVICE
-    return thrust::transform(thrust::cuda::par.on(cudaStream), lhsIter,
+    return thrust::transform(GET_EXECUTION_POLICY(cudaStream), lhsIter,
         lhsIter + indexVectorLength, rhsIter, outputIter, f) - outputIter;
-#else
-    return thrust::transform(thrust::host, lhsIter, lhsIter + indexVectorLength,
-                             rhsIter, outputIter, f) - outputIter;
-#endif
   }
 
  protected:
@@ -131,6 +117,17 @@ class OutputVectorBinder {
     }
   }
 
+  // Shared by all output iterator;
+  template<typename OutputIterator>
+  int transform(OutputIterator outputIter) {
+    typedef TransformContext<OutputIterator, FunctorType> Context;
+    Context ctx(
+      outputIter, indexVectorLength, functorType, cudaStream);
+    InputVectorBinder<Context, NInput> binder(
+        ctx, inputs, indexVector, baseCounts, startCount);
+    return binder.bind();
+  }
+
  private:
   OutputVector output;
   std::vector<InputVector> inputs;
@@ -147,17 +144,6 @@ class OutputVectorBinder {
   int transformDimensionOutput(DimensionOutputVector output);
   int transformMeasureOutput(MeasureOutputVector output);
   int transformScratchSpaceOutput(ScratchSpaceVector output);
-
-  // Shared by all output iterator;
-  template<typename OutputIterator>
-  int transform(OutputIterator outputIter) {
-    typedef TransformContext<OutputIterator, FunctorType> Context;
-    Context ctx(
-        outputIter, indexVectorLength, functorType, cudaStream);
-    InputVectorBinder<Context, NInput> binder(
-        ctx, inputs, indexVector, baseCounts, startCount);
-    return binder.bind();
-  }
 };
 
 }  // namespace ares

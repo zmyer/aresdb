@@ -121,6 +121,15 @@ var _ = ginkgo.Describe("SchemaHandler", func() {
 		resp, _ := http.Post(fmt.Sprintf("http://%s/schema/tables", hostPort), "application/json", bytes.NewBuffer(tableSchemaBytes))
 		Ω(resp.StatusCode).Should(Equal(http.StatusOK))
 
+		var createdTableSchema *metaCom.Table
+		testMetaStore.On("CreateTable", mock.Anything).Run(func(args mock.Arguments) {
+			createdTableSchema = args.Get(0).(*metaCom.Table)
+		}).Return(nil).Once()
+		resp, _ = http.Post(fmt.Sprintf("http://%s/schema/tables", hostPort), "application/json", bytes.NewBuffer(tableSchemaBytes))
+		Ω(resp.StatusCode).Should(Equal(http.StatusOK))
+		Ω(createdTableSchema).ShouldNot(BeNil())
+		Ω(createdTableSchema.Config).Should(Equal(metastore.DefaultTableConfig))
+
 		testMetaStore.On("CreateTable", mock.Anything).Return(errors.New("Failed to create table")).Once()
 		resp, _ = http.Post(fmt.Sprintf("http://%s/schema/tables", hostPort), "application/json", bytes.NewBuffer(tableSchemaBytes))
 		Ω(resp.StatusCode).Should(Equal(http.StatusInternalServerError))
@@ -191,16 +200,6 @@ var _ = ginkgo.Describe("SchemaHandler", func() {
 		testMetaStore.On("AddColumn", mock.Anything, mock.Anything, mock.Anything).Return(errors.New("Failed to add columns")).Once()
 		resp, _ = http.Post(fmt.Sprintf("http://%s/schema/tables/%s/columns", hostPort, "testTable"), "application/json", bytes.NewBuffer(columnBytes))
 		Ω(resp.StatusCode).Should(Equal(http.StatusInternalServerError))
-
-		errorColumnBytes = []byte(`{"name": "testCol", "type": ""}`)
-		testMetaStore.On("AddColumn", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
-		resp, _ = http.Post(fmt.Sprintf("http://%s/schema/tables/%s/columns", hostPort, "testTable"), "application/json", bytes.NewBuffer(errorColumnBytes))
-		Ω(resp.StatusCode).Should(Equal(http.StatusBadRequest))
-
-		errorColumnBytes = []byte(`{"name": "testCol", "type": "Int32", "defaultValue": "hello"}`)
-		testMetaStore.On("AddColumn", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
-		resp, _ = http.Post(fmt.Sprintf("http://%s/schema/tables/%s/columns", hostPort, "testTable"), "application/json", bytes.NewBuffer(errorColumnBytes))
-		Ω(resp.StatusCode).Should(Equal(http.StatusBadRequest))
 	})
 
 	ginkgo.It("DeleteColumn should work", func() {

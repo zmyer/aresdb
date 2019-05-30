@@ -1,7 +1,7 @@
 package metastore
 
 import (
-	"github.com/uber/aresdb/clients"
+	controllerCli "github.com/uber/aresdb/controller/client"
 	"github.com/uber/aresdb/metastore/common"
 	"github.com/uber/aresdb/utils"
 	"reflect"
@@ -15,12 +15,12 @@ type SchemaFetchJob struct {
 	intervalInSeconds int
 	schemaMutator     TableSchemaMutator
 	schemaValidator   TableSchemaValidator
-	controllerClient  clients.ControllerClient
+	controllerClient  controllerCli.ControllerClient
 	stopChan          chan struct{}
 }
 
 // NewSchemaFetchJob creates a new SchemaFetchJob
-func NewSchemaFetchJob(intervalInSeconds int, schemaMutator TableSchemaMutator, schemaValidator TableSchemaValidator, controllerClient clients.ControllerClient, clusterName, initialHash string) *SchemaFetchJob {
+func NewSchemaFetchJob(intervalInSeconds int, schemaMutator TableSchemaMutator, schemaValidator TableSchemaValidator, controllerClient controllerCli.ControllerClient, clusterName, initialHash string) *SchemaFetchJob {
 	return &SchemaFetchJob{
 		clusterName:       clusterName,
 		hash:              initialHash,
@@ -86,7 +86,7 @@ func (j *SchemaFetchJob) applySchemaChange(tables []common.Table) (err error) {
 	}
 
 	for _, table := range tables {
-		if !oldTablesMap[table.Name] {
+		if _, exist := oldTablesMap[table.Name]; !exist {
 			// found new table
 			err = j.schemaMutator.CreateTable(&table)
 			if err != nil {
@@ -99,7 +99,20 @@ func (j *SchemaFetchJob) applySchemaChange(tables []common.Table) (err error) {
 			if err != nil {
 				return
 			}
-			if !reflect.DeepEqual(&table, oldTable) {
+			if oldTable.Incarnation < table.Incarnation {
+				// found new table incarnation, delete previous table and data
+				// then create new table
+				err := j.schemaMutator.DeleteTable(table.Name)
+				if err != nil {
+					return err
+				}
+				utils.GetRootReporter().GetCounter(utils.SchemaDeletionCount).Inc(1)
+				err = j.schemaMutator.CreateTable(&table)
+				if err != nil {
+					return err
+				}
+				utils.GetRootReporter().GetCounter(utils.SchemaCreationCount).Inc(1)
+			} else if oldTable.Incarnation == table.Incarnation && !reflect.DeepEqual(&table, oldTable) {
 				// found table update
 				j.schemaValidator.SetNewTable(table)
 				j.schemaValidator.SetOldTable(*oldTable)

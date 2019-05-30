@@ -23,6 +23,26 @@ import (
 	"unsafe"
 )
 
+// GetFlags return flags about the memory management.
+func GetFlags() C.DeviceMemoryFlags {
+	return C.GetFlags()
+}
+
+func IsDeviceMemoryImplementation() bool {
+	return (GetFlags() & C.DEVICE_MEMORY_IMPLEMENTATION_FLAG) != 0
+}
+
+func IsPooledMemory() bool {
+	return (GetFlags() & C.POOLED_MEMORY_FLAG) != 0
+}
+
+// Init will initialize the memory management.
+func Init() {
+	doCGoCall(func() C.CGoCallResHandle {
+		return C.Init()
+	})
+}
+
 // HostAlloc allocates memory in C.
 func HostAlloc(bytes int) unsafe.Pointer {
 	return unsafe.Pointer(doCGoCall(func() C.CGoCallResHandle {
@@ -35,42 +55,6 @@ func HostFree(p unsafe.Pointer) {
 	doCGoCall(func() C.CGoCallResHandle {
 		return C.HostFree(p)
 	})
-}
-
-// MemAccess access memory location with starting pointer and an offset.
-func MemAccess(p unsafe.Pointer, offset int) unsafe.Pointer {
-	return unsafe.Pointer(uintptr(p) + uintptr(offset))
-}
-
-// MemDist returns the distance between two unsafe pointer.
-func MemDist(p1 unsafe.Pointer, p2 unsafe.Pointer) int64 {
-	return int64(uintptr(p1) - uintptr(p2))
-}
-
-// MemEqual performs byte to byte comparison.
-func MemEqual(a unsafe.Pointer, b unsafe.Pointer, bytes int) bool {
-	for i := 0; i < bytes; i++ {
-		if *(*uint8)(MemAccess(a, i)) != *(*uint8)(MemAccess(b, i)) {
-			return false
-		}
-	}
-	return true
-}
-
-// MemCopy performs memory copy of specified bytes from src to dst
-func MemCopy(dst unsafe.Pointer, src unsafe.Pointer, bytes int) {
-	for i := 0; i < bytes; i++ {
-		*(*uint8)(MemAccess(dst, i)) = *(*uint8)(MemAccess(src, i))
-	}
-}
-
-// MemSwap performs memory copy of specified bytes from src to dst
-func MemSwap(dst unsafe.Pointer, src unsafe.Pointer, bytes int) {
-	for i := 0; i < bytes; i++ {
-		tmp := *(*uint8)(MemAccess(dst, i))
-		*(*uint8)(MemAccess(dst, i)) = *(*uint8)(MemAccess(src, i))
-		*(*uint8)(MemAccess(src, i)) = tmp
-	}
 }
 
 // MakeSliceFromCPtr make a slice that points to data that cptr points to.
@@ -181,6 +165,16 @@ func CudaProfilerStop() {
 	doCGoCall(func() C.CGoCallResHandle {
 		return C.CudaProfilerStop()
 	})
+}
+
+// GetDeviceMemoryInfo returns information about total size and free size of device memory in bytes for a specfic
+// device.
+func GetDeviceMemoryInfo(device int) (int, int) {
+	var freeSize, totalSize C.size_t
+	doCGoCall(func() C.CGoCallResHandle {
+		return C.GetDeviceMemoryInfo(&freeSize, &totalSize, C.int(device))
+	})
+	return int(freeSize), int(totalSize)
 }
 
 // doCGoCall does the cgo call by converting CGoCallResHandle to C.int and *C.char and calls doCGoCall.

@@ -32,28 +32,29 @@ import (
 	"strconv"
 )
 
-// ColumnTypeToExprType maps data type from the column schema format to
+// DataTypeToExprType maps data type from the column schema format to
 // expression AST format.
-var ColumnTypeToExprType = map[string]expr.Type{
-	metaCom.Bool:      expr.Boolean,
-	metaCom.Int8:      expr.Signed,
-	metaCom.Int16:     expr.Signed,
-	metaCom.Int32:     expr.Signed,
-	metaCom.Int64:     expr.Signed,
-	metaCom.Uint8:     expr.Unsigned,
-	metaCom.Uint16:    expr.Unsigned,
-	metaCom.Uint32:    expr.Unsigned,
-	metaCom.Float32:   expr.Float,
-	metaCom.SmallEnum: expr.Unsigned,
-	metaCom.BigEnum:   expr.Unsigned,
-	metaCom.GeoPoint:  expr.GeoPoint,
-	metaCom.GeoShape:  expr.GeoShape,
+var DataTypeToExprType = map[memCom.DataType]expr.Type{
+	memCom.Bool:      expr.Boolean,
+	memCom.Int8:      expr.Signed,
+	memCom.Int16:     expr.Signed,
+	memCom.Int32:     expr.Signed,
+	memCom.Int64:     expr.Signed,
+	memCom.Uint8:     expr.Unsigned,
+	memCom.Uint16:    expr.Unsigned,
+	memCom.Uint32:    expr.Unsigned,
+	memCom.Float32:   expr.Float,
+	memCom.SmallEnum: expr.Unsigned,
+	memCom.BigEnum:   expr.Unsigned,
+	memCom.GeoPoint:  expr.GeoPoint,
+	memCom.GeoShape:  expr.GeoShape,
 }
 
 const (
 	unsupportedInputType      = "unsupported input type for %s: %s"
 	defaultTimezoneTableAlias = "__timezone_lookup"
 	geoShapeLimit             = 100
+	nonAggregationQueryLimit  = 1000
 )
 
 // constants for call names.
@@ -122,7 +123,11 @@ func (q *AQLQuery) Compile(store memstore.MemStore, returnHLL bool) *AQLQueryCon
 	}
 
 	// Process measure and dimensions.
-	qc.processMeasureAndDimensions()
+	qc.processMeasure()
+	if qc.Error != nil {
+		return qc
+	}
+	qc.processDimensions()
 	if qc.Error != nil {
 		return qc
 	}
@@ -416,7 +421,9 @@ func (qc *AQLQueryContext) parseExprs() {
 	}
 
 	// Dimensions.
-	for i, dim := range qc.Query.Dimensions {
+	rawDimensions := qc.Query.Dimensions
+	qc.Query.Dimensions = []Dimension{}
+	for _, dim := range rawDimensions {
 		dim.TimeBucketizer = strings.Trim(dim.TimeBucketizer, " ")
 		if dim.TimeBucketizer != "" {
 			// make sure time column is defined
@@ -436,16 +443,20 @@ func (qc *AQLQueryContext) parseExprs() {
 				qc.Error = utils.StackError(err, "Failed to parse dimension: %s", dim.TimeBucketizer)
 				return
 			}
+			qc.Query.Dimensions = append(qc.Query.Dimensions, dim)
 		} else {
 			// dimension is defined as sqlExpression
 			dim.expr, err = expr.ParseExpr(dim.Expr)
+			if err != nil {
+				qc.Error = utils.StackError(err, "Failed to parse dimension: %s", dim.Expr)
+				return
+			}
+			if _, ok := dim.expr.(*expr.Wildcard); ok {
+				qc.Query.Dimensions = append(qc.Query.Dimensions, qc.getAllColumnsDimension()...)
+			} else {
+				qc.Query.Dimensions = append(qc.Query.Dimensions, dim)
+			}
 		}
-
-		if err != nil {
-			qc.Error = utils.StackError(err, "Failed to parse dimension: %s", dim.Expr)
-			return
-		}
-		qc.Query.Dimensions[i] = dim
 	}
 
 	// Measures.
@@ -649,13 +660,15 @@ func (qc *AQLQueryContext) Rewrite(expression expr.Expr) expr.Expr {
 				column.Name, qc.TableScanners[tableID].Schema.Schema.Name)
 			return expression
 		}
-		e.ExprType = ColumnTypeToExprType[column.Type]
+		dataType := qc.TableScanners[tableID].Schema.ValueTypeByColumn[columnID]
+		e.ExprType = DataTypeToExprType[dataType]
 		e.TableID = tableID
 		e.ColumnID = columnID
 		dict := qc.TableScanners[tableID].Schema.EnumDicts[column.Name]
 		e.EnumDict = dict.Dict
 		e.EnumReverseDict = dict.ReverseDict
-		e.DataType = qc.TableScanners[tableID].Schema.ValueTypeByColumn[columnID]
+		e.DataType = dataType
+		e.IsHLLColumn = column.HLLConfig.IsHLLColumn
 	case *expr.UnaryExpr:
 		if isUUIDColumn(e.Expr) && e.Op != expr.GET_HLL_VALUE {
 			qc.Error = utils.StackError(nil, "uuid column type only supports countdistincthll unary expression")
@@ -1037,11 +1050,16 @@ func (qc *AQLQueryContext) Rewrite(expression expr.Expr) expr.Expr {
 					nil, "expect 1 argument to be a column for %s", e.Name)
 				break
 			}
+
 			e.Name = hllCallName
-			e.Args[0] = &expr.UnaryExpr{
-				Op:       expr.GET_HLL_VALUE,
-				Expr:     colRef,
-				ExprType: expr.Unsigned,
+			// 1. noop when column itself is hll column
+			// 2. compute hll on the fly when column is not hll column
+			if !colRef.IsHLLColumn {
+				e.Args[0] = &expr.UnaryExpr{
+					Op:       expr.GET_HLL_VALUE,
+					Expr:     colRef,
+					ExprType: expr.Unsigned,
+				}
 			}
 			e.ExprType = expr.Unsigned
 		case hllCallName:
@@ -1583,11 +1601,11 @@ func (qc *AQLQueryContext) processTimeFilter() {
 				qc.Query.TimeFilter.Column)
 			return
 		}
-		timeColumnType := qc.TableScanners[0].Schema.Schema.Columns[timeColumnID].Type
-		if timeColumnType != metaCom.Uint32 {
+		timeColumnType := qc.TableScanners[0].Schema.ValueTypeByColumn[timeColumnID]
+		if timeColumnType != memCom.Uint32 {
 			qc.Error = utils.StackError(nil,
 				"expect time filter column %s of type Uint32, but got %s",
-				qc.Query.TimeFilter.Column, timeColumnType)
+				qc.Query.TimeFilter.Column, memCom.DataTypeName[timeColumnType])
 			return
 		}
 	}
@@ -1677,11 +1695,20 @@ func (g *geoTableUsageCollector) Visit(expression expr.Expr) expr.Visitor {
 	return g
 }
 
-func (qc *AQLQueryContext) processMeasureAndDimensions() {
+func (qc *AQLQueryContext) processMeasure() {
 	// OOPK engine only supports one measure per query.
 	if len(qc.Query.Measures) != 1 {
 		qc.Error = utils.StackError(nil, "expect one measure per query, but got %d",
 			len(qc.Query.Measures))
+		return
+	}
+
+	if _, ok := qc.Query.Measures[0].expr.(*expr.NumberLiteral); ok {
+		qc.isNonAggregationQuery = true
+		// in case user forgot to provide limit
+		if qc.Query.Limit == 0 {
+			qc.Query.Limit = nonAggregationQueryLimit
+		}
 		return
 	}
 
@@ -1702,7 +1729,7 @@ func (qc *AQLQueryContext) processMeasureAndDimensions() {
 
 	if len(aggregate.Args) != 1 {
 		qc.Error = utils.StackError(nil,
-			"expect one parameter for aggregate function %s, but got %u",
+			"expect one parameter for aggregate function %s, but got %d",
 			aggregate.Name, len(aggregate.Args))
 		return
 	}
@@ -1769,12 +1796,32 @@ func (qc *AQLQueryContext) processMeasureAndDimensions() {
 			"unsupported aggregate function: %s", aggregate.Name)
 		return
 	}
+}
 
+func (qc *AQLQueryContext) getAllColumnsDimension() (columns []Dimension) {
+	// only main table columns wildcard match supported
+	for _, column := range qc.TableScanners[0].Schema.Schema.Columns {
+		if !column.Deleted && column.Type != metaCom.GeoShape {
+			columns = append(columns, Dimension{
+				expr: &expr.VarRef{Val: column.Name},
+				Expr: column.Name,
+			})
+		}
+	}
+	return
+}
+
+func (qc *AQLQueryContext) processDimensions() {
 	// Copy dimension ASTs.
 	qc.OOPK.Dimensions = make([]expr.Expr, len(qc.Query.Dimensions))
 	for i, dim := range qc.Query.Dimensions {
 		// TODO: support numeric bucketizer.
 		qc.OOPK.Dimensions[i] = dim.expr
+		if dim.expr.Type() == expr.GeoShape {
+			qc.Error = utils.StackError(nil,
+				"GeoShape can not be used for dimension: %s", dim.Expr)
+			return
+		}
 	}
 
 	if qc.OOPK.geoIntersection != nil {
@@ -1874,9 +1921,13 @@ func (qc *AQLQueryContext) sortDimensionColumns() {
 	}
 	// plus one byte per dimension column for validity
 	qc.OOPK.DimRowBytes += numDimensions
-	if qc.OOPK.DimRowBytes > C.MAX_DIMENSION_BYTES {
-		qc.Error = utils.StackError(nil, "maximum dimension bytes: %d, got: %", C.MAX_DIMENSION_BYTES, qc.OOPK.DimRowBytes)
-		return
+
+	if !qc.isNonAggregationQuery {
+		// no dimension size checking for non-aggregation query
+		if qc.OOPK.DimRowBytes > C.MAX_DIMENSION_BYTES {
+			qc.Error = utils.StackError(nil, "maximum dimension bytes: %d, got: %d", C.MAX_DIMENSION_BYTES, qc.OOPK.DimRowBytes)
+			return
+		}
 	}
 }
 

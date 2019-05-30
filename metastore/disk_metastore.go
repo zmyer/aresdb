@@ -30,10 +30,6 @@ import (
 	"github.com/uber/aresdb/utils"
 )
 
-const (
-	enumDelimiter = "\u0000\n"
-)
-
 // meaningful defaults of table configurations.
 const (
 	DefaultBatchSize                      = 2097152
@@ -49,6 +45,22 @@ const (
 	DefaultRedologRotationInterval        = 10800                // 3 hours
 	DefaultMaxRedoLogSize                 = 1 << 30              // 1 GB
 )
+
+// DefaultTableConfig represents default table config
+var DefaultTableConfig = common.TableConfig{
+	BatchSize:                DefaultBatchSize,
+	ArchivingIntervalMinutes: DefaultArchivingIntervalMinutes,
+	ArchivingDelayMinutes:    DefaultArchivingDelayMinutes,
+	BackfillMaxBufferSize:    DefaultBackfillMaxBufferSize,
+	BackfillIntervalMinutes:  DefaultBackfillIntervalMinutes,
+	BackfillThresholdInBytes: DefaultBackfillThresholdInBytes,
+	BackfillStoreBatchSize:   DefaultBackfillStoreBatchSize,
+	RecordRetentionInDays:    DefaultRecordRetentionInDays,
+	SnapshotIntervalMinutes:  DefaultSnapshotIntervalMinutes,
+	SnapshotThreshold:        DefaultSnapshotThreshold,
+	RedoLogRotationInterval:  DefaultRedologRotationInterval,
+	MaxRedoLogFileSize:       DefaultMaxRedoLogSize,
+}
 
 // disk-based metastore implementation.
 // all validation of user input (eg. table/column name and table/column struct) will be pushed to api layer,
@@ -352,6 +364,13 @@ func (dm *diskMetaStore) CreateTable(table *common.Table) (err error) {
 		return ErrTableAlreadyExist
 	}
 
+	validator := NewTableSchameValidator()
+	validator.SetNewTable(*table)
+	err = validator.Validate()
+	if err != nil {
+		return err
+	}
+
 	if err = dm.MkdirAll(dm.getTableDirPath(table.Name), 0755); err != nil {
 		return err
 	}
@@ -499,7 +518,6 @@ func (dm *diskMetaStore) AddColumn(tableName string, column common.Column, appen
 	if table, err = dm.readSchemaFile(tableName); err != nil {
 		return err
 	}
-
 	return dm.addColumn(table, column, appendToArchivingSortOrder)
 }
 
@@ -806,7 +824,10 @@ func (dm *diskMetaStore) pushSchemaChange(table *common.Table) {
 
 func (dm *diskMetaStore) pushShardOwnershipChange(tableName string) {
 	if dm.shardOwnershipWatcher != nil {
-		dm.shardOwnershipWatcher <- common.ShardOwnership{tableName, 0, true}
+		dm.shardOwnershipWatcher <- common.ShardOwnership{
+			TableName: tableName,
+			Shard:     0,
+			ShouldOwn: true}
 		<-dm.shardOwnershipDone
 	}
 }
@@ -847,19 +868,18 @@ func (dm *diskMetaStore) removeTable(tableName string) error {
 }
 
 func (dm *diskMetaStore) addColumn(table *common.Table, column common.Column, appendToArchivingSortOrder bool) error {
-	for _, existingColumn := range table.Columns {
-		if existingColumn.Name == column.Name {
-			if !existingColumn.Deleted {
-				return ErrColumnAlreadyExist
-			}
-		}
-	}
+	validator := NewTableSchameValidator()
+	validator.SetOldTable(*table)
 
 	newColumnID := len(table.Columns)
 	table.Columns = append(table.Columns, column)
-
 	if appendToArchivingSortOrder {
 		table.ArchivingSortColumns = append(table.ArchivingSortColumns, newColumnID)
+	}
+	validator.SetNewTable(*table)
+	err := validator.Validate()
+	if err != nil {
+		return err
 	}
 
 	if err := dm.writeSchemaFile(table); err != nil {
@@ -914,7 +934,7 @@ func (dm *diskMetaStore) removeColumn(table *common.Table, columnName string) er
 				return err
 			}
 
-			if column.Type == common.BigEnum || column.Type == common.SmallEnum {
+			if column.IsEnumColumn() {
 				dm.removeEnumColumn(table.Name, column.Name)
 			}
 
@@ -982,7 +1002,7 @@ func (dm *diskMetaStore) readEnumFile(tableName, columnName string) ([]string, e
 				columnName,
 			)
 	}
-	return strings.Split(strings.TrimSuffix(string(enumBytes), enumDelimiter), enumDelimiter), nil
+	return strings.Split(strings.TrimSuffix(string(enumBytes), common.EnumDelimiter), common.EnumDelimiter), nil
 }
 
 // writeEnumFile append enum cases to existing file
@@ -1005,7 +1025,7 @@ func (dm *diskMetaStore) writeEnumFile(tableName, columnName string, enumCases [
 	}
 	defer writer.Close()
 
-	_, err = io.WriteString(writer, fmt.Sprintf("%s%s", strings.Join(enumCases, enumDelimiter), enumDelimiter))
+	_, err = io.WriteString(writer, fmt.Sprintf("%s%s", strings.Join(enumCases, common.EnumDelimiter), common.EnumDelimiter))
 	if err != nil {
 		return utils.StackError(err, "Failed to write enum cases, table: %s, column: %s", tableName, columnName)
 	}
@@ -1024,20 +1044,7 @@ func (dm *diskMetaStore) readSchemaFile(tableName string) (*common.Table, error)
 		)
 	}
 	var table common.Table
-	table.Config = common.TableConfig{
-		BatchSize:                DefaultBatchSize,
-		ArchivingIntervalMinutes: DefaultArchivingIntervalMinutes,
-		ArchivingDelayMinutes:    DefaultArchivingDelayMinutes,
-		BackfillMaxBufferSize:    DefaultBackfillMaxBufferSize,
-		BackfillIntervalMinutes:  DefaultBackfillIntervalMinutes,
-		BackfillThresholdInBytes: DefaultBackfillThresholdInBytes,
-		BackfillStoreBatchSize:   DefaultBackfillStoreBatchSize,
-		RecordRetentionInDays:    DefaultRecordRetentionInDays,
-		SnapshotIntervalMinutes:  DefaultSnapshotIntervalMinutes,
-		SnapshotThreshold:        DefaultSnapshotThreshold,
-		RedoLogRotationInterval:  DefaultRedologRotationInterval,
-		MaxRedoLogFileSize:       DefaultMaxRedoLogSize,
-	}
+	table.Config = DefaultTableConfig
 
 	err = json.Unmarshal(jsonBytes, &table)
 	if err != nil {
@@ -1279,7 +1286,7 @@ func (dm *diskMetaStore) enumColumnExists(tableName string, columnName string) e
 				continue
 			}
 
-			if column.Type != common.BigEnum && column.Type != common.SmallEnum {
+			if !column.IsEnumColumn() {
 				return ErrNotEnumColumn
 			}
 

@@ -33,8 +33,8 @@ var _ = ginkgo.Describe("archiving", func() {
 	var batch99, batch101, batch110 *Batch
 	var archiveBatch0 *ArchiveBatch
 	var vs LiveStore
-	var dataTypes []memCom.DataType
-	var archivingJob *ArchivingJob
+	//var dataTypes []memCom.DataType
+	//var archivingJob *ArchivingJob
 	var scheduler *schedulerImpl
 	var jobManager *archiveJobManager
 	var cutoff uint32 = 140
@@ -66,7 +66,7 @@ var _ = ginkgo.Describe("archiving", func() {
 		DefaultValues:     []*memCom.DataValue{&memCom.NullDataValue, &memCom.NullDataValue, &memCom.NullDataValue},
 	}, nil, nil, hostMemoryManager, shardID)
 
-	shard.ArchiveStore = ArchiveStore{CurrentVersion: &ArchiveStoreVersion{
+	shard.ArchiveStore = &ArchiveStore{CurrentVersion: &ArchiveStoreVersion{
 		ArchivingCutoff: 0,
 		Batches:         map[int32]*ArchiveBatch{},
 	}}
@@ -76,7 +76,7 @@ var _ = ginkgo.Describe("archiving", func() {
 	}
 
 	ginkgo.BeforeEach(func() {
-		dataTypes = []memCom.DataType{memCom.Uint32, memCom.Bool, memCom.Float32}
+		//dataTypes = []memCom.DataType{memCom.Uint32, memCom.Bool, memCom.Float32}
 		var err error
 		batch110, err = getFactory().ReadLiveBatch("archiving/batch-110")
 		Ω(err).Should(BeNil())
@@ -123,9 +123,9 @@ var _ = ginkgo.Describe("archiving", func() {
 		shardMap[shardID].ArchiveStore.CurrentVersion.shard = shardMap[shardID]
 		shardMap[shardID].ArchiveStore.CurrentVersion.Batches[0] = archiveBatch0
 		// Map from max event time to file creation time.
-		shardMap[shardID].LiveStore.RedoLogManager = NewRedoLogManager(10800, 1<<30, m.diskStore, table, shardID)
-		shardMap[shardID].LiveStore.RedoLogManager.MaxEventTimePerFile = make(map[int64]uint32)
-		shardMap[shardID].LiveStore.RedoLogManager.MaxEventTimePerFile[1] = 1
+		shardMap[shardID].LiveStore.RedoLogManager = NewFileRedoLogManager(10800, 1<<30, m.diskStore, table, shardID)
+		shardMap[shardID].LiveStore.RedoLogManager.(*fileRedologManager).MaxEventTimePerFile = make(map[int64]uint32)
+		shardMap[shardID].LiveStore.RedoLogManager.(*fileRedologManager).MaxEventTimePerFile[1] = 1
 		// make purge to pass
 		shardMap[shardID].LiveStore.BackfillManager = NewBackfillManager(table, shardID, metaCom.TableConfig{
 			BackfillMaxBufferSize:    1 << 32,
@@ -134,13 +134,6 @@ var _ = ginkgo.Describe("archiving", func() {
 		shardMap[shardID].LiveStore.BackfillManager.LastRedoFile = 2
 		shardMap[shardID].LiveStore.BackfillManager.LastBatchOffset = 1
 		m.TableShards[table] = shardMap
-
-		archivingJob = &ArchivingJob{
-			tableName: table,
-			shardID:   shardID,
-			cutoff:    cutoff,
-			memStore:  m,
-		}
 
 		scheduler = newScheduler(m)
 		jobManager = scheduler.jobManagers[memCom.ArchivingJobType].(*archiveJobManager)
@@ -235,7 +228,7 @@ var _ = ginkgo.Describe("archiving", func() {
 		(m.diskStore).(*diskMocks.DiskStore).On(
 			"OpenVectorPartyFileForWrite", table, mock.Anything, shardID, day, mock.Anything, mock.Anything).Return(writer, nil)
 
-		tableShard.LiveStore.RedoLogManager.CurrentFileCreationTime = 2
+		tableShard.LiveStore.RedoLogManager.(*fileRedologManager).CurrentFileCreationTime = 2
 
 		timeIncrementer := &utils.TimeIncrementer{IncBySecond: 1}
 		utils.SetClockImplementation(timeIncrementer.Now)
@@ -282,7 +275,7 @@ var _ = ginkgo.Describe("archiving", func() {
 		}
 
 		// MaxEventTimePerFile should be purged.
-		Ω(tableShard.LiveStore.RedoLogManager.MaxEventTimePerFile).ShouldNot(HaveKey(int64(1)))
+		Ω(tableShard.LiveStore.RedoLogManager.(*fileRedologManager).MaxEventTimePerFile).ShouldNot(HaveKey(int64(1)))
 
 		// Archive again, there should be no crashes or errors.
 		Ω(m.Archive(table, shardID, cutoff+100, jobManager.reportArchiveJobDetail)).Should(BeNil())

@@ -18,7 +18,8 @@ package query
 import "C"
 
 import (
-		memCom "github.com/uber/aresdb/memstore/common"
+	"encoding/json"
+	memCom "github.com/uber/aresdb/memstore/common"
 	"github.com/uber/aresdb/memutils"
 	queryCom "github.com/uber/aresdb/query/common"
 	"github.com/uber/aresdb/query/expr"
@@ -26,49 +27,75 @@ import (
 	"unsafe"
 )
 
+var bytesComma = []byte(",")
+
 // Postprocess converts the internal dimension and measure vector in binary
-// format to AQLTimeSeriesResult nested result format. It also translates enum
+// format to AQLQueryResult nested result format. It also translates enum
 // values back to their string representations.
-func (qc *AQLQueryContext) Postprocess() queryCom.AQLTimeSeriesResult {
+func (qc *AQLQueryContext) Postprocess() {
 	oopkContext := qc.OOPK
 	if oopkContext.IsHLL() {
 		result, err := queryCom.NewTimeSeriesHLLResult(qc.HLLQueryResult, queryCom.HLLDataHeader)
 		if err != nil {
 			// should never be here except bug
 			qc.Error = utils.StackError(err, "failed to read hll result")
-			return nil
+			return
 		}
-		return queryCom.ComputeHLLResult(result)
+		qc.Results = queryCom.ComputeHLLResult(result)
+		return
 	}
 
-	result := make(queryCom.AQLTimeSeriesResult)
-	dimValues := make([]*string, len(oopkContext.Dimensions))
-	dataTypes := make([]memCom.DataType, len(oopkContext.Dimensions))
-	reverseDicts := make(map[int][]string)
-	dimOffsets := make(map[int][2]int)
+	if !qc.isNonAggregationQuery {
+		qc.flushResultBuffer()
+	}
+}
 
+func (qc *AQLQueryContext) initResultFlushContext() {
+	qc.resultFlushContext.dimensionValueCache = make([]map[queryCom.TimeDimensionMeta]map[int64]string, len(qc.OOPK.Dimensions))
+	qc.resultFlushContext.dimensionDataTypes = make([]memCom.DataType, len(qc.OOPK.Dimensions))
+	qc.resultFlushContext.reverseDicts = make(map[int][]string)
+
+	oopkContext := qc.OOPK
 	for dimIndex, dimExpr := range oopkContext.Dimensions {
-		dimVectorIndex := oopkContext.DimensionVectorIndex[dimIndex]
-		valueOffset, nullOffset := queryCom.GetDimensionStartOffsets(oopkContext.NumDimsPerDimWidth, dimVectorIndex, oopkContext.ResultSize)
-		dimOffsets[dimIndex] = [2]int{valueOffset, nullOffset}
-		dataTypes[dimIndex], reverseDicts[dimIndex] = getDimensionDataType(dimExpr), qc.getEnumReverseDict(dimIndex, dimExpr)
+		qc.resultFlushContext.dimensionDataTypes[dimIndex], qc.resultFlushContext.reverseDicts[dimIndex] = getDimensionDataType(dimExpr), qc.getEnumReverseDict(dimIndex, dimExpr)
 	}
+}
+
+// flushResultBuffer reads dimension and measure data from current OOPK buffer to Results
+func (qc *AQLQueryContext) flushResultBuffer() {
+	start := utils.Now()
+	defer func() { qc.reportTiming(qc.cudaStreams[0], &start, resultFlushTiming) }()
+
+	if qc.Results == nil {
+		qc.Results = make(queryCom.AQLQueryResult)
+	}
+
+	oopkContext := qc.OOPK
+	dpc := qc.resultFlushContext
+	dimValues := make([]*string, len(oopkContext.Dimensions))
 
 	var fromOffset, toOffset int
 	if qc.fromTime != nil && qc.toTime != nil {
 		_, fromOffset = qc.fromTime.Time.Zone()
 		_, toOffset = qc.toTime.Time.Zone()
 	}
-	// caches time formatted time dimension values
-	dimensionValueCache := make([]map[queryCom.TimeDimensionMeta]map[int64]string, len(oopkContext.Dimensions))
+
+	dimOffsets := make(map[int][2]int)
+	for dimIndex := range oopkContext.Dimensions {
+		dimVectorIndex := oopkContext.DimensionVectorIndex[dimIndex]
+		valueOffset, nullOffset := queryCom.GetDimensionStartOffsets(oopkContext.NumDimsPerDimWidth, dimVectorIndex, oopkContext.ResultSize)
+		dimOffsets[dimIndex] = [2]int{valueOffset, nullOffset}
+	}
+
 	for i := 0; i < oopkContext.ResultSize; i++ {
+		dimReadingStart := utils.Now()
 		for dimIndex := range oopkContext.Dimensions {
 			offsets := dimOffsets[dimIndex]
 			valueOffset, nullOffset := offsets[0], offsets[1]
-			valuePtr, nullPtr := memutils.MemAccess(oopkContext.dimensionVectorH, valueOffset), memutils.MemAccess(oopkContext.dimensionVectorH, nullOffset)
+			valuePtr, nullPtr := utils.MemAccess(oopkContext.dimensionVectorH, valueOffset), utils.MemAccess(oopkContext.dimensionVectorH, nullOffset)
 
-			if qc.Query.Dimensions[dimIndex].isTimeDimension() && dimensionValueCache[dimIndex] == nil {
-				dimensionValueCache[dimIndex] = make(map[queryCom.TimeDimensionMeta]map[int64]string)
+			if qc.Query.Dimensions[dimIndex].isTimeDimension() && dpc.dimensionValueCache[dimIndex] == nil {
+				dpc.dimensionValueCache[dimIndex] = make(map[queryCom.TimeDimensionMeta]map[int64]string)
 			}
 
 			var timeDimensionMeta *queryCom.TimeDimensionMeta
@@ -86,24 +113,37 @@ func (qc *AQLQueryContext) Postprocess() queryCom.AQLTimeSeriesResult {
 			}
 
 			dimValues[dimIndex] = queryCom.ReadDimension(
-				valuePtr, nullPtr, i, dataTypes[dimIndex], reverseDicts[dimIndex],
-				timeDimensionMeta, dimensionValueCache[dimIndex])
+				valuePtr, nullPtr, i, dpc.dimensionDataTypes[dimIndex], dpc.reverseDicts[dimIndex],
+				timeDimensionMeta, dpc.dimensionValueCache[dimIndex])
 		}
+		utils.GetRootReporter().GetTimer(utils.QueryDimReadLatency).Record(utils.Now().Sub(dimReadingStart))
 
-		measureBytes := oopkContext.MeasureBytes
+		if qc.isNonAggregationQuery {
+			if qc.ResponseWriter != nil {
+				valuesBytes, _ := json.Marshal(dimValues)
+				qc.ResponseWriter.Write(valuesBytes)
+				if !(qc.OOPK.done && i == oopkContext.ResultSize-1) {
+					qc.ResponseWriter.Write(bytesComma)
+				}
+			} else {
+				qc.Results.Append(dimValues)
+			}
 
-		// For avg aggregation function, we only need to read first 4 bytes which is the average.
-		if qc.OOPK.AggregateType == C.AGGR_AVG_FLOAT {
-			measureBytes = 4
+		} else {
+			measureBytes := oopkContext.MeasureBytes
+
+			// For avg aggregation function, we only need to read first 4 bytes which is the average.
+			if qc.OOPK.AggregateType == C.AGGR_AVG_FLOAT {
+				measureBytes = 4
+			}
+
+			measureValue := readMeasure(
+				utils.MemAccess(oopkContext.measureVectorH, i*oopkContext.MeasureBytes), oopkContext.Measure,
+				measureBytes)
+
+			qc.Results.Set(dimValues, measureValue)
 		}
-
-		measureValue := readMeasure(
-			memutils.MemAccess(oopkContext.measureVectorH, i*oopkContext.MeasureBytes), oopkContext.Measure,
-			measureBytes)
-
-		result.Set(dimValues, measureValue)
 	}
-	return result
 }
 
 // PostprocessAsHLLData serializes the query result into HLLData format. It will also release the device memory after
@@ -149,8 +189,10 @@ func (qc *AQLQueryContext) ReleaseHostResultsBuffers() {
 	ctx := &qc.OOPK
 	memutils.HostFree(ctx.dimensionVectorH)
 	ctx.dimensionVectorH = nil
-	memutils.HostFree(ctx.measureVectorH)
-	ctx.measureVectorH = nil
+	if ctx.measureVectorH != nil {
+		memutils.HostFree(ctx.measureVectorH)
+		ctx.measureVectorH = nil
+	}
 
 	// hllVectorD and hllDimRegIDCountD used for hll query only
 	deviceFreeAndSetNil(&ctx.hllVectorD)

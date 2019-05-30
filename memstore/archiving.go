@@ -125,6 +125,9 @@ func (ss liveStoreSnapshot) createArchivingPatches(
 		})
 	}
 
+	utils.GetLogger().With("action", "archiving", "table", tableName, "shard", shardID, "numArchived",
+		numRecordsArchived, "numIgnored", numRecordsIgnored, "oldCutoff", oldCutoff, "newCutoff", cutoff).Info("createArchivingPatches")
+
 	utils.GetReporter(tableName, shardID).GetCounter(utils.ArchivingIgnoredRecords).Inc(numRecordsIgnored)
 	utils.GetReporter(tableName, shardID).GetCounter(utils.ArchivingRecords).Inc(numRecordsArchived)
 
@@ -236,6 +239,8 @@ func (m *memStoreImpl) Archive(table string, shardID int, cutoff uint32, reporte
 		reporter(jobKey, func(status *ArchiveJobDetail) {
 			status.LastDuration = duration
 		})
+		utils.GetReporter(table, shardID).
+			GetCounter(utils.ArchivingCount).Inc(1)
 	}()
 
 	reporter(jobKey, func(status *ArchiveJobDetail) {
@@ -244,7 +249,9 @@ func (m *memStoreImpl) Archive(table string, shardID int, cutoff uint32, reporte
 
 	shard, err := m.GetTableShard(table, shardID)
 	if err != nil {
-		return err
+		// table already deleted. stop here
+		utils.GetLogger().With("table", table, "shard", shardID, "error", err).Warn("Failed to find shard, is it deleted?")
+		return nil
 	}
 	defer shard.Users.Done()
 
@@ -278,7 +285,7 @@ func (m *memStoreImpl) Archive(table string, shardID int, cutoff uint32, reporte
 
 	backfillMgr := shard.LiveStore.BackfillManager
 	if err := shard.LiveStore.RedoLogManager.
-		PurgeRedologFileAndData(cutoff, backfillMgr.LastRedoFile,
+		CheckpointRedolog(cutoff, backfillMgr.LastRedoFile,
 			backfillMgr.LastBatchOffset); err != nil {
 		return err
 	}

@@ -99,7 +99,7 @@ var _ = ginkgo.Describe("Time Bucketizer", func() {
 
 		utils.Init(common.AresServerConfig{Query: common.QueryConfig{TimezoneTable: common.TimezoneConfig{
 			TableName: "",
-		}}}, common.NewLoggerFactory().GetDefaultLogger().Sugar(), common.NewLoggerFactory().GetDefaultLogger().Sugar(), tally.NewTestScope("test", nil))
+		}}}, common.NewLoggerFactory().GetDefaultLogger(), common.NewLoggerFactory().GetDefaultLogger(), tally.NewTestScope("test", nil))
 		qc.timezoneTable.tableColumn = "timezone"
 		qc.timezoneTable.tableAlias = defaultTimezoneTableAlias
 		qc.TableIDByAlias = map[string]int{defaultTimezoneTableAlias: 0}
@@ -275,6 +275,67 @@ var _ = ginkgo.Describe("Time Bucketizer", func() {
 		Ω(qc.toTime).ShouldNot(BeNil())
 		Ω(qc.fixedTimezone.String()).Should(Equal("America/Los_Angeles"))
 		bb, _ := json.Marshal(qc.Query.Dimensions[0].expr)
-		Ω(string(bb)).Should(Equal(`{"Op":"FLOOR","LHS":{"Op":"+","LHS":{"Val":"requested_at","ExprType":"Unknown","TableID":0,"ColumnID":0,"DataType":0},"RHS":{"Op":"+","LHS":{"Val":0,"Int":-25200,"Expr":"-25200","ExprType":"Signed"},"RHS":{"Op":"*","LHS":{"Val":0,"Int":3600,"Expr":"3600","ExprType":"Signed"},"RHS":{"Op":"\u003e=","LHS":{"Val":"requested_at","ExprType":"Unknown","TableID":0,"ColumnID":0,"DataType":0},"RHS":{"Val":0,"Int":1509872400,"Expr":"1509872400","ExprType":"Unknown"},"ExprType":"Boolean"},"ExprType":"Signed"},"ExprType":"Unknown"},"ExprType":"Unknown"},"RHS":{"Val":0,"Int":3600,"Expr":"3600","ExprType":"Unsigned"},"ExprType":"Unknown"}`))
+		Ω(string(bb)).Should(MatchJSON(
+			`
+		{
+		  "Op": "FLOOR",
+		  "LHS": {
+			"Op": "+",
+			"LHS": {
+			  "Val": "requested_at",
+			  "ExprType": "Unknown",
+			  "TableID": 0,
+			  "ColumnID": 0,
+			  "DataType": 0,
+			  "IsHLLColumn": false
+			},
+			"RHS": {
+			  "Op": "+",
+			  "LHS": {
+				"Val": 0,
+				"Int": -25200,
+				"Expr": "-25200",
+				"ExprType": "Signed"
+			  },
+			  "RHS": {
+				"Op": "*",
+				"LHS": {
+				  "Val": 0,
+				  "Int": 3600,
+				  "Expr": "3600",
+				  "ExprType": "Signed"
+				},
+				"RHS": {
+				  "Op": ">=",
+				  "LHS": {
+					"Val": "requested_at",
+					"ExprType": "Unknown",
+					"TableID": 0,
+					"ColumnID": 0,
+					"DataType": 0,
+					"IsHLLColumn": false
+				  },
+				  "RHS": {
+					"Val": 0,
+					"Int": 1509872400,
+					"Expr": "1509872400",
+					"ExprType": "Unknown"
+				  },
+				  "ExprType": "Boolean"
+				},
+				"ExprType": "Signed"
+			  },
+			  "ExprType": "Unknown"
+			},
+			"ExprType": "Unknown"
+		  },
+		  "RHS": {
+			"Val": 0,
+			"Int": 3600,
+			"Expr": "3600",
+			"ExprType": "Unsigned"
+		  },
+		  "ExprType": "Unknown"
+		}`))
 	})
 })

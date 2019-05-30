@@ -17,54 +17,68 @@
 
 namespace ares {
 
+#define BIND_DIMENSION_OUTPUT(dataType) \
+            return binder.transform( \
+                  ares::make_dimension_output_iterator<dataType>( \
+                      output.DimValues, output.DimNulls));
+
+template <int NInput>
+class OutputVectorBinderHelper {
+    public:
+    template<typename OutputVectorBinder>
+    int bind(OutputVectorBinder &binder, DimensionOutputVector output) {
+        switch (output.DataType) {
+            case Bool:
+              BIND_DIMENSION_OUTPUT(bool)
+            case Int8:
+              BIND_DIMENSION_OUTPUT(int8_t)
+            case Int16:
+              BIND_DIMENSION_OUTPUT(int16_t)
+            case Int32:
+              BIND_DIMENSION_OUTPUT(int32_t)
+            case Uint8:
+              BIND_DIMENSION_OUTPUT(uint8_t)
+            case Uint16:
+              BIND_DIMENSION_OUTPUT(uint16_t)
+            case Uint32:
+              BIND_DIMENSION_OUTPUT(uint32_t)
+            case Int64:
+              BIND_DIMENSION_OUTPUT(int64_t)
+            case Float32:
+              BIND_DIMENSION_OUTPUT(float_t)
+            default:
+              throw std::invalid_argument(
+                  "Unsupported data type for DimensionOutput");
+          }
+    }
+};
+
+template<>
+class OutputVectorBinderHelper<1>: OutputVectorBinderHelper<2> {
+
+    typedef OutputVectorBinderHelper<2> super_t;
+
+    public:
+    template<typename OutputVectorBinder>
+    int bind(OutputVectorBinder binder, DimensionOutputVector output) {
+        switch (output.DataType) {
+            case UUID:
+                BIND_DIMENSION_OUTPUT(UUIDT)
+             case GeoPoint:
+                BIND_DIMENSION_OUTPUT(GeoPointT)
+             default:
+                return super_t::bind(binder, output);
+        }
+    }
+};
+
+
+
 template<int NInput, typename FunctorType>
 int OutputVectorBinder<NInput, FunctorType>::transformDimensionOutput(
     DimensionOutputVector output) {
-  switch (output.DataType) {
-    case Bool:
-      return transform(
-          ares::make_dimension_output_iterator<bool>(
-              output.DimValues, output.DimNulls));
-    case Int8:
-      return transform(
-          ares::make_dimension_output_iterator<int8_t>(
-              output.DimValues, output.DimNulls));
-    case Int16:
-      return transform(
-          ares::make_dimension_output_iterator<int16_t>(
-              output.DimValues, output.DimNulls));
-    case Int32:
-      return transform(
-          ares::make_dimension_output_iterator<int32_t>(
-              output.DimValues, output.DimNulls));
-    case Uint8:
-      return transform(
-          ares::make_dimension_output_iterator<uint8_t>(
-              output.DimValues, output.DimNulls));
-    case Uint16:
-      return transform(
-          ares::make_dimension_output_iterator<
-              uint16_t>(
-              output.DimValues, output.DimNulls));
-    case Uint32:
-      return transform(
-          ares::make_dimension_output_iterator<
-              uint32_t>(
-              output.DimValues, output.DimNulls));
-    case Int64:
-      return transform(ares::make_dimension_output_iterator<int64_t>(
-          output.DimValues, output.DimNulls));
-    case UUID:
-      return transform(ares::make_dimension_output_iterator<UUIDT>(
-          output.DimValues, output.DimNulls));
-    case Float32:
-      return transform(
-          ares::make_dimension_output_iterator<float_t>(
-              output.DimValues, output.DimNulls));
-    default:
-      throw std::invalid_argument(
-          "Unsupported data type for DimensionOutput");
-  }
+    OutputVectorBinderHelper<NInput> helper;
+    return helper.bind(*this, output);
 }
 
 // explicit instantiations.

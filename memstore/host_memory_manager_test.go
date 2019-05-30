@@ -392,6 +392,7 @@ var _ = ginkgo.Describe("HostMemoryManager", func() {
 			Columns: []metaCom.Column{
 				{
 					Name: "c0",
+					Type: metaCom.Uint32,
 					Config: metaCom.ColumnConfig{
 						PreloadingDays: 0,
 						Priority:       0,
@@ -399,6 +400,7 @@ var _ = ginkgo.Describe("HostMemoryManager", func() {
 				},
 				{
 					Name: "c1",
+					Type: metaCom.Uint32,
 					Config: metaCom.ColumnConfig{
 						PreloadingDays: 5,
 						Priority:       10,
@@ -406,16 +408,17 @@ var _ = ginkgo.Describe("HostMemoryManager", func() {
 				},
 				{
 					Name: "c2",
+					Type: metaCom.Uint32,
 					Config: metaCom.ColumnConfig{
 						PreloadingDays: 10,
 						Priority:       10,
 					},
 				},
 			},
-			Config: metaCom.TableConfig{
-				BatchSize: 10,
-			},
+			PrimaryKeyColumns: []int{1},
 		}
+		testTable.Config = metastore.DefaultTableConfig
+		testTable.Config.BatchSize = 10
 		testMetaStore, err := metastore.NewDiskMetaStore(testBasePath)
 		Ω(err).Should(BeNil())
 		testMemStore = NewMemStore(testMetaStore, testDiskStore).(*memStoreImpl)
@@ -434,7 +437,7 @@ var _ = ginkgo.Describe("HostMemoryManager", func() {
 			testDiskStore, testHostMemoryManager, 0)
 		testMemStore.TableSchemas[testTableName] = testSchema
 
-		testMemStore.TableShards[testTableName][0].ArchiveStore = ArchiveStore{
+		testMemStore.TableShards[testTableName][0].ArchiveStore = &ArchiveStore{
 			CurrentVersion: &ArchiveStoreVersion{
 				Batches:         map[int32]*ArchiveBatch{},
 				ArchivingCutoff: 100,
@@ -491,7 +494,8 @@ var _ = ginkgo.Describe("HostMemoryManager", func() {
 			<-ownershipEvents
 			done2 <- struct{}{}
 		}()
-		testMetaStore.CreateTable(testTable)
+		err = testMetaStore.CreateTable(testTable)
+		Ω(err).Should(BeNil())
 		// Should not trigger any preload.
 		Ω(testMetaStore.UpdateColumn(testTableName, "c0", newTableConfig)).Should(BeNil())
 
@@ -572,11 +576,9 @@ var _ = ginkgo.Describe("HostMemoryManager", func() {
 
 		testMetaStore, err := metastore.NewDiskMetaStore(testBasePath)
 		// watch schema change
-		events, done, err := testMetaStore.WatchTableSchemaEvents()
+		_, done, err := testMetaStore.WatchTableSchemaEvents()
 		Ω(err).Should(BeNil())
-		var schemaEvent *metaCom.Table
 		go func() {
-			schemaEvent = <-events
 			done <- struct{}{}
 		}()
 
@@ -596,14 +598,14 @@ var _ = ginkgo.Describe("HostMemoryManager", func() {
 			testDiskStore, testHostMemoryManager, 1)
 		testMemStore.TableSchemas[testTableName] = testSchema
 
-		testMemStore.TableShards[testTableName][0].ArchiveStore = ArchiveStore{
+		testMemStore.TableShards[testTableName][0].ArchiveStore = &ArchiveStore{
 			CurrentVersion: &ArchiveStoreVersion{
 				Batches:         map[int32]*ArchiveBatch{},
 				ArchivingCutoff: 100,
 			},
 		}
 
-		testMemStore.TableShards[testTableName][1].ArchiveStore = ArchiveStore{
+		testMemStore.TableShards[testTableName][1].ArchiveStore = &ArchiveStore{
 			CurrentVersion: &ArchiveStoreVersion{
 				Batches:         map[int32]*ArchiveBatch{},
 				ArchivingCutoff: 100,
@@ -721,11 +723,9 @@ var _ = ginkgo.Describe("HostMemoryManager", func() {
 
 		testMetaStore, err := metastore.NewDiskMetaStore(testBasePath)
 		// watch schema change
-		events, done, err := testMetaStore.WatchTableSchemaEvents()
+		_, done, err := testMetaStore.WatchTableSchemaEvents()
 		Ω(err).Should(BeNil())
-		var schemaEvent *metaCom.Table
 		go func() {
-			schemaEvent = <-events
 			done <- struct{}{}
 		}()
 
@@ -743,7 +743,7 @@ var _ = ginkgo.Describe("HostMemoryManager", func() {
 			testDiskStore, testHostMemoryManager, 0)
 		testMemStore.TableSchemas[testTableName] = testSchema
 
-		testMemStore.TableShards[testTableName][0].ArchiveStore = ArchiveStore{
+		testMemStore.TableShards[testTableName][0].ArchiveStore = &ArchiveStore{
 			CurrentVersion: &ArchiveStoreVersion{
 				Batches:         map[int32]*ArchiveBatch{},
 				ArchivingCutoff: 100,
@@ -828,11 +828,9 @@ var _ = ginkgo.Describe("HostMemoryManager", func() {
 			},
 		}
 		// watch schema change
-		events, done, err := testMetaStore.WatchTableSchemaEvents()
+		_, done, err := testMetaStore.WatchTableSchemaEvents()
 		Ω(err).Should(BeNil())
-		var schemaEvent *metaCom.Table
 		go func() {
-			schemaEvent = <-events
 			done <- struct{}{}
 		}()
 
@@ -853,7 +851,7 @@ var _ = ginkgo.Describe("HostMemoryManager", func() {
 		testMemStore.TableSchemas[testTableName] = testSchema
 
 		testBatchID1 := int32(15739)
-		testMemStore.TableShards[testTableName][0].ArchiveStore = ArchiveStore{
+		testMemStore.TableShards[testTableName][0].ArchiveStore = &ArchiveStore{
 			CurrentVersion: &ArchiveStoreVersion{
 				Batches:         map[int32]*ArchiveBatch{},
 				ArchivingCutoff: 100,

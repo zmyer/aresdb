@@ -59,6 +59,16 @@ type Column struct {
 
 	// Mutable column configs.
 	Config ColumnConfig `json:"config,omitempty"`
+
+	// HLLEnabled determines whether a column is enabled for hll cardinality estimation
+	// HLLConfig is immutable
+	HLLConfig HLLConfig `json:"hllConfig,omitempty"`
+}
+
+// HLLConfig defines hll configuration
+// swagger:model hllConfig
+type HLLConfig struct {
+	IsHLLColumn bool `json:"isHLLColumn,omitempty"`
 }
 
 // TableConfig defines the table configurations that can be changed
@@ -71,44 +81,44 @@ type TableConfig struct {
 	InitialPrimaryKeyNumBuckets int `json:"initPrimaryKeyNumBuckets,omitempty"`
 
 	// Size of each live batch, should be sufficiently large.
-	BatchSize int `json:"batchSize,omitempty"`
+	BatchSize int `json:"batchSize,omitempty" validate:"min=1"`
 
 	// Specifies how often to create a new redo log file.
-	RedoLogRotationInterval int `json:"redoLogRotationInterval,omitempty"`
+	RedoLogRotationInterval int `json:"redoLogRotationInterval,omitempty" validate:"min=1"`
 
 	// Specifies the size limit of a single redo log file.
-	MaxRedoLogFileSize int `json:"maxRedoLogFileSize,omitempty"`
+	MaxRedoLogFileSize int `json:"maxRedoLogFileSize,omitempty" validate:"min=1"`
 
 	// Fact table specific configs
 
 	// Number of minutes after event time before a record can be archived.
-	ArchivingDelayMinutes uint32 `json:"archivingDelayMinutes,omitempty"`
+	ArchivingDelayMinutes uint32 `json:"archivingDelayMinutes,omitempty" validate:"min=1"`
 	// Specifies how often archiving runs.
-	ArchivingIntervalMinutes uint32 `json:"archivingIntervalMinutes,omitempty"`
+	ArchivingIntervalMinutes uint32 `json:"archivingIntervalMinutes,omitempty" validate:"min=1"`
 
 	// Specifies how often backfill runs.
-	BackfillIntervalMinutes uint32 `json:"backfillIntervalMinutes,omitempty"`
+	BackfillIntervalMinutes uint32 `json:"backfillIntervalMinutes,omitempty" validate:"min=1"`
 
 	// Upper limit of current backfill buffer size + backfilling buffer size.
-	BackfillMaxBufferSize int64 `json:"backfillMaxBufferSize,omitempty"`
+	BackfillMaxBufferSize int64 `json:"backfillMaxBufferSize,omitempty" validate:"min=1"`
 
 	// Backfill buffer size in bytes that will trigger a backfill job.
-	BackfillThresholdInBytes int64 `json:"backfillThresholdInBytes,omitempty"`
+	BackfillThresholdInBytes int64 `json:"backfillThresholdInBytes,omitempty" validate:"min=1"`
 
 	// Size of each live batch used by backfill job.
-	BackfillStoreBatchSize int `json:"backfillStoreBatchSize,omitempty"`
+	BackfillStoreBatchSize int `json:"backfillStoreBatchSize,omitempty" validate:"min=1"`
 
 	// Records with timestamp older than now - RecordRetentionInDays will be skipped
 	// during ingestion and backfill. 0 means unlimited days.
-	RecordRetentionInDays int `json:"recordRetentionInDays,omitempty"`
+	RecordRetentionInDays int `json:"recordRetentionInDays,omitempty" validate:"min=1"`
 
 	// Dimension table specific configs
 
 	// Number of mutations to accumulate before creating a new snapshot.
-	SnapshotThreshold int `json:"snapshotThreshold,omitempty"`
+	SnapshotThreshold int `json:"snapshotThreshold,omitempty" validate:"min=1"`
 
 	// Specifies how often snapshot runs.
-	SnapshotIntervalMinutes int `json:"snapshotIntervalMinutes,omitempty"`
+	SnapshotIntervalMinutes int `json:"snapshotIntervalMinutes,omitempty" validate:"min=1"`
 
 	AllowMissingEventTime bool `json:"allowMissingEventTime,omitempty"`
 }
@@ -132,16 +142,21 @@ type Table struct {
 	// IDs of columns to sort based upon.
 	ArchivingSortColumns []int `json:"archivingSortColumns,omitempty"`
 
+	// Incarnation gets incremented every time an table name is reused
+	// only used for controller managed schema in cluster setting
+	Incarnation int `json:"incarnation"`
+	// Version gets incremented every time when schema is updated
+	// only used for controller managed schema in cluster setting
 	Version int `json:"version"`
 }
 
 // IsEnumColumn checks whether a column is enum column
-func (c Column) IsEnumColumn() bool {
+func (c *Column) IsEnumColumn() bool {
 	return c.Type == BigEnum || c.Type == SmallEnum
 }
 
 // IsOverwriteOnlyDataType checks whether a column is overwrite only
-func (c Column) IsOverwriteOnlyDataType() bool {
+func (c *Column) IsOverwriteOnlyDataType() bool {
 	switch c.Type {
 	case Uint8, Int8, Uint16, Int16, Uint32, Int32, Float32, Int64:
 		return false

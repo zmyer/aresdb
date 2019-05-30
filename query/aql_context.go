@@ -23,6 +23,7 @@ import (
 	memCom "github.com/uber/aresdb/memstore/common"
 	queryCom "github.com/uber/aresdb/query/common"
 	"github.com/uber/aresdb/query/expr"
+	"net/http"
 	"strings"
 	"time"
 	"unsafe"
@@ -170,7 +171,8 @@ type oopkBatchContext struct {
 	// Remaining number of inputs in indexVectorD after filtering.
 	// Notice that this size is not necessarily number of database rows
 	// when columns[0] is compressed.
-	size int
+	size               int
+	sizeAfterPreFilter int
 
 	// Scratch vectors for evaluating the current AST expr in device memory.
 	// [0] stores the values and [1] stores the validities (NULLs).
@@ -211,7 +213,8 @@ type oopkBatchContext struct {
 	// Except SUM that uses 8 bytes
 	measureVectorD [2]devicePointer
 
-	// Size of the results from prior batches.
+	// For aggregate queries: Size of the results from prior batches.
+	// For non aggregate queries: result size for current batch, after decompression
 	resultSize int
 
 	// Capacity of the result dimension and measure vector, should be at least
@@ -289,12 +292,24 @@ type OOPKContext struct {
 	// Stores the overall query stats for live batches and archive batches.
 	LiveBatchStats    oopkQueryStats `json:"liveStats"`
 	ArchiveBatchStats oopkQueryStats `json:"archiveStats"`
+
+	// indicate query can be return in the middle, no need to process all batches,
+	// this is usually for non-aggregation query with limit condition
+	done bool
 }
 
 // timezoneTableContext stores context for timezone column queries
 type timezoneTableContext struct {
 	tableAlias  string
 	tableColumn string
+}
+
+// context for processing dimensions
+type resultFlushContext struct {
+	// caches time formatted time dimension values
+	dimensionValueCache []map[queryCom.TimeDimensionMeta]map[int64]string
+	dimensionDataTypes  []memCom.DataType
+	reverseDicts        map[int][]string
 }
 
 // GeoIntersection is the struct to storing geo intersection related fields.
@@ -360,7 +375,8 @@ type AQLQueryContext struct {
 	// [0] stores the current stream, and [1] stores the other stream.
 	cudaStreams [2]unsafe.Pointer
 
-	Results queryCom.AQLTimeSeriesResult `json:"-"`
+	Results            queryCom.AQLQueryResult `json:"-"`
+	resultFlushContext resultFlushContext
 
 	// whether to serialize the query result as HLLData. If ReturnHLLData is true, we will not release dimension
 	// vector and measure vector until serialization is done.
@@ -375,8 +391,18 @@ type AQLQueryContext struct {
 
 	// timezone column and time filter related
 	timezoneTable timezoneTableContext
+
+	// fields for non aggregate query
+	// Flag to indicate if this query is not aggregation query
+	isNonAggregationQuery      bool
+	numberOfRowsWritten        int
+	maxBatchSizeAfterPrefilter int
+
+	// for eager flush query result
+	ResponseWriter http.ResponseWriter
 }
 
+// IsHLL return if the aggregation function is HLL
 func (ctx *OOPKContext) IsHLL() bool {
 	return ctx.AggregateType == C.AGGR_HLL
 }

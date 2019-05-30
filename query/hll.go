@@ -113,7 +113,7 @@ func (qc *AQLQueryContext) SerializeHLL(dataTypes []memCom.DataType,
 	// Copy dim values vector from device.
 	dimVectorH := unsafe.Pointer(&builder.buffer[headerSize])
 	asyncCopyDimensionVector(dimVectorH, oopkContext.currentBatch.dimensionVectorD[0].getPointer(),
-		oopkContext.ResultSize, oopkContext.NumDimsPerDimWidth, oopkContext.ResultSize, oopkContext.currentBatch.resultCapacity,
+		oopkContext.ResultSize, 0, oopkContext.NumDimsPerDimWidth, oopkContext.ResultSize, oopkContext.currentBatch.resultCapacity,
 		memutils.AsyncCopyDeviceToHost, qc.cudaStreams[0], qc.Device)
 
 	memutils.AsyncCopyDeviceToHost(unsafe.Pointer(&builder.buffer[headerSize+paddedRawDimValuesVectorLength]),
@@ -132,18 +132,18 @@ func (qc *AQLQueryContext) SerializeHLL(dataTypes []memCom.DataType,
 			dimIndex := timeDimensions[i]
 			dimVectorIndex := qc.OOPK.DimensionVectorIndex[dimIndex]
 			valueOffset, nullOffset := queryCom.GetDimensionStartOffsets(oopkContext.NumDimsPerDimWidth, dimVectorIndex, int(qc.OOPK.ResultSize))
-			dimPtrs[i] = [2]unsafe.Pointer{memutils.MemAccess(dimVectorH, valueOffset), memutils.MemAccess(dimVectorH, nullOffset)}
+			dimPtrs[i] = [2]unsafe.Pointer{utils.MemAccess(dimVectorH, valueOffset), utils.MemAccess(dimVectorH, nullOffset)}
 		}
 
 		for rowNumber := 0; rowNumber < oopkContext.ResultSize; rowNumber++ {
 			for i := 0; i < len(timeDimensions); i++ {
 				valueStart, nullStart := dimPtrs[i][0], dimPtrs[i][1]
 				// We don't need to do anything for null.
-				if *(*uint8)(memutils.MemAccess(nullStart, rowNumber)) == 0 {
+				if *(*uint8)(utils.MemAccess(nullStart, rowNumber)) == 0 {
 					continue
 				}
 
-				valuePtr := (*uint32)(memutils.MemAccess(valueStart, rowNumber*4))
+				valuePtr := (*uint32)(utils.MemAccess(valueStart, rowNumber*4))
 				// Don't need to check type of time dimension, they should be guaranteed by AQL Compiler.
 
 				newVal := int64(*valuePtr)
@@ -168,7 +168,7 @@ func (qc *AQLQueryContext) SerializeHLL(dataTypes []memCom.DataType,
 	return builder.buffer, nil
 }
 
-// SerializeHeader
+// SerializeHeader serialize HLL header
 //	-----------query result 0-------------------
 //	 <header>
 //	 [uint8] num_enum_columns [uint8] bytes per dim ... [padding for 8 bytes]

@@ -39,7 +39,7 @@ var _ = ginkgo.Describe("json marshaller", func() {
 		Batches: map[int32]*LiveBatch{
 			int32(1): &liveBatch,
 		},
-		RedoLogManager: NewRedoLogManager(1, 1<<30, nil, "test", 1),
+		RedoLogManager: NewFileRedoLogManager(1, 1<<30, nil, "test", 1),
 		BackfillManager: NewBackfillManager("ares_trips", 0, metaCom.TableConfig{
 			BackfillMaxBufferSize:    1 << 32,
 			BackfillThresholdInBytes: 1 << 21,
@@ -66,7 +66,7 @@ var _ = ginkgo.Describe("json marshaller", func() {
 	}
 
 	tableShard := TableShard{
-		ArchiveStore: ArchiveStore{
+		ArchiveStore: &ArchiveStore{
 			CurrentVersion: &ArchiveStoreVersion{
 				Batches: map[int32]*ArchiveBatch{
 					int32(1): &archiveBatch,
@@ -77,7 +77,7 @@ var _ = ginkgo.Describe("json marshaller", func() {
 			Batches: map[int32]*LiveBatch{
 				int32(1): &liveBatch,
 			},
-			RedoLogManager: NewRedoLogManager(1, 1<<30, nil, "test", 1),
+			RedoLogManager: NewFileRedoLogManager(1, 1<<30, nil, "test", 1),
 			BackfillManager: NewBackfillManager("ares_trips", 0, metaCom.TableConfig{
 				BackfillMaxBufferSize:    1 << 32,
 				BackfillThresholdInBytes: 1 << 21,
@@ -223,7 +223,7 @@ var _ = ginkgo.Describe("json marshaller", func() {
 		`))
 	})
 
-	ginkgo.It("RedoLogManager should work", func() {
+	ginkgo.It("fileRedologManager should work", func() {
 		jsonStr, err := json.Marshal(&liveStore.RedoLogManager)
 		Ω(err).Should(BeNil())
 		Ω(jsonStr).Should(MatchJSON(`{
@@ -248,6 +248,7 @@ var _ = ginkgo.Describe("json marshaller", func() {
 			  "primaryKeyColumns": null,
 			  "isFactTable": false,
 			  "config": {},
+              "incarnation": 0,
 			  "version": 0
 			},
 			"columnIDs": null,

@@ -38,7 +38,7 @@ var _ = ginkgo.Describe("AQL compiler", func() {
 		}
 		utils.Init(common.AresServerConfig{Query: common.QueryConfig{TimezoneTable: common.TimezoneConfig{
 			TableName: "api_cities",
-		}}}, common.NewLoggerFactory().GetDefaultLogger().Sugar(), common.NewLoggerFactory().GetDefaultLogger().Sugar(), tally.NewTestScope("test", nil))
+		}}}, common.NewLoggerFactory().GetDefaultLogger(), common.NewLoggerFactory().GetDefaultLogger(), tally.NewTestScope("test", nil))
 
 		qc.processTimezone()
 		Ω(qc.Error).Should(BeNil())
@@ -1048,17 +1048,15 @@ var _ = ginkgo.Describe("AQL compiler", func() {
 	})
 
 	ginkgo.It("processes matched time filters", func() {
-		schema := &memstore.TableSchema{
-			ColumnIDs: map[string]int{
-				"request_at": 0,
-			},
-			Schema: metaCom.Table{
-				IsFactTable: true,
-				Columns: []metaCom.Column{
-					{Name: "request_at", Type: metaCom.Uint32},
-				},
+		table := metaCom.Table{
+			IsFactTable: true,
+			Columns: []metaCom.Column{
+				{Name: "request_at", Type: metaCom.Uint32},
 			},
 		}
+
+		schema := memstore.NewTableSchema(&table)
+
 		q := &AQLQuery{
 			Table: "trips",
 			Measures: []Measure{
@@ -1183,18 +1181,14 @@ var _ = ginkgo.Describe("AQL compiler", func() {
 	})
 
 	ginkgo.It("processes unmatched time filters", func() {
-		schema := &memstore.TableSchema{
-			ColumnIDs: map[string]int{
-				"request_at": 1,
+		table := metaCom.Table{
+			Columns: []metaCom.Column{
+				{Name: "uuid", Type: metaCom.UUID},
+				{Name: "request_at", Type: metaCom.Uint32},
 			},
-			Schema: metaCom.Table{
-				Columns: []metaCom.Column{
-					{Name: "uuid", Type: metaCom.UUID},
-					{Name: "request_at", Type: metaCom.Uint32},
-				},
-				IsFactTable: false,
-			},
+			IsFactTable: false,
 		}
+		schema := memstore.NewTableSchema(&table)
 		q := &AQLQuery{
 			Table: "trips",
 			Measures: []Measure{
@@ -1358,31 +1352,17 @@ var _ = ginkgo.Describe("AQL compiler", func() {
 	})
 
 	ginkgo.It("processes measure and dimensions", func() {
-		schema := &memstore.TableSchema{
-			ValueTypeByColumn: []memCom.DataType{
-				memCom.Uint8,
-				memCom.Uint16,
-				memCom.Bool,
-				memCom.Float32,
-				memCom.Uint32,
-			},
-			ColumnIDs: map[string]int{
-				"status":     0,
-				"city_id":    1,
-				"is_first":   2,
-				"fare":       3,
-				"request_at": 4,
-			},
-			Schema: metaCom.Table{
-				Columns: []metaCom.Column{
-					{Name: "status", Type: metaCom.Uint8},
-					{Name: "city_id", Type: metaCom.Int16},
-					{Name: "is_first", Type: metaCom.Bool},
-					{Name: "fare", Type: metaCom.Float32},
-					{Name: "request_at", Type: metaCom.Uint32},
-				},
+
+		table := metaCom.Table{
+			Columns: []metaCom.Column{
+				{Name: "status", Type: metaCom.Uint8},
+				{Name: "city_id", Type: metaCom.Uint16},
+				{Name: "is_first", Type: metaCom.Bool},
+				{Name: "fare", Type: metaCom.Float32},
+				{Name: "request_at", Type: metaCom.Uint32},
 			},
 		}
+		schema := memstore.NewTableSchema(&table)
 
 		qc := &AQLQueryContext{
 			TableIDByAlias: map[string]int{
@@ -1406,7 +1386,8 @@ var _ = ginkgo.Describe("AQL compiler", func() {
 		Ω(qc.Error).Should(BeNil())
 		qc.resolveTypes()
 		Ω(qc.Error).Should(BeNil())
-		qc.processMeasureAndDimensions()
+		qc.processMeasure()
+		qc.processDimensions()
 		Ω(qc.Error).Should(BeNil())
 
 		Ω(qc.OOPK.Measure).Should(Equal(&expr.VarRef{
@@ -1419,7 +1400,7 @@ var _ = ginkgo.Describe("AQL compiler", func() {
 			&expr.VarRef{
 				Val:      "city_id",
 				ColumnID: 1,
-				ExprType: expr.Signed,
+				ExprType: expr.Unsigned,
 				DataType: memCom.Uint16,
 			},
 			&expr.BinaryExpr{
@@ -1443,6 +1424,48 @@ var _ = ginkgo.Describe("AQL compiler", func() {
 			3: columnUsedByAllBatches,
 			4: columnUsedByAllBatches,
 		}))
+	})
+
+	ginkgo.It("process dimensions non agg", func() {
+		table := metaCom.Table{
+			Columns: []metaCom.Column{
+				{Name: "status", Type: metaCom.Uint8},
+				{Name: "city_id", Type: metaCom.Uint16},
+				{Name: "is_first", Type: metaCom.Bool},
+				{Name: "fare", Type: metaCom.Float32},
+				{Name: "request_at", Type: metaCom.Uint32},
+			},
+		}
+		schema := memstore.NewTableSchema(&table)
+
+		qc := &AQLQueryContext{
+			TableIDByAlias: map[string]int{
+				"trips": 0,
+			},
+			TableScanners: []*TableScanner{
+				{Schema: schema, ColumnUsages: map[int]columnUsage{}},
+			},
+		}
+		qc.Query = &AQLQuery{
+			Table: "trips",
+			Measures: []Measure{
+				{Expr: "1"},
+			},
+			Dimensions: []Dimension{
+				{Expr: "city_id"},
+				{Expr: "request_at"},
+				{Expr: "*"},
+			},
+		}
+		qc.parseExprs()
+		Ω(qc.Query.Dimensions).Should(HaveLen(7))
+		Ω(qc.Error).Should(BeNil())
+		qc.resolveTypes()
+		Ω(qc.Error).Should(BeNil())
+		qc.processMeasure()
+		Ω(qc.isNonAggregationQuery).Should(BeTrue())
+		qc.processDimensions()
+		Ω(qc.OOPK.Dimensions).Should(HaveLen(7))
 	})
 
 	ginkgo.It("sorts used columns", func() {
@@ -1836,26 +1859,14 @@ var _ = ginkgo.Describe("AQL compiler", func() {
 	})
 
 	ginkgo.It("processes hyperloglog", func() {
-		tripsSchema := &memstore.TableSchema{
-			ValueTypeByColumn: []memCom.DataType{
-				memCom.Uint32,
-				memCom.Uint32,
-				memCom.Uint16,
-			},
-			ColumnIDs: map[string]int{
-				"request_at":      0,
-				"client_uuid_hll": 1,
-				"test_field":      2,
-			},
-			Schema: metaCom.Table{
-				IsFactTable: true,
-				Columns: []metaCom.Column{
-					{Name: "request_at", Type: metaCom.Uint32},
-					{Name: "client_uuid_hll", Type: metaCom.Uint32},
-					{Name: "test_field", Type: metaCom.Uint16},
-				},
+		table := metaCom.Table{
+			IsFactTable: true,
+			Columns: []metaCom.Column{
+				{Name: "request_at", Type: metaCom.Uint32},
+				{Name: "client_uuid_hll", Type: metaCom.UUID, HLLConfig: metaCom.HLLConfig{IsHLLColumn: true}},
 			},
 		}
+		tripsSchema := memstore.NewTableSchema(&table)
 
 		qc := &AQLQueryContext{
 			TableIDByAlias: map[string]int{
@@ -1868,21 +1879,6 @@ var _ = ginkgo.Describe("AQL compiler", func() {
 				{Schema: tripsSchema, ColumnUsages: map[int]columnUsage{}},
 			},
 		}
-		qc.Query = &AQLQuery{
-			Table: "trips",
-			Measures: []Measure{
-				{Expr: "hll(test_field)"},
-			},
-			TimeFilter: TimeFilter{
-				Column: "request_at",
-				From:   "-1d",
-				To:     "0d",
-			},
-		}
-		qc.parseExprs()
-
-		qc.resolveTypes()
-		Ω(qc.Error).ShouldNot(BeNil())
 
 		qc.Query = &AQLQuery{
 			Table: "trips",
@@ -1906,6 +1902,23 @@ var _ = ginkgo.Describe("AQL compiler", func() {
 			Table: "trips",
 			Measures: []Measure{
 				{Expr: "hll(client_uuid_hll)"},
+			},
+			TimeFilter: TimeFilter{
+				Column: "request_at",
+				From:   "-1d",
+				To:     "0d",
+			},
+		}
+		qc.Error = nil
+		qc.parseExprs()
+		qc.resolveTypes()
+		Ω(qc.Error).Should(BeNil())
+		Ω(qc.Query.Measures[0].expr.String()).Should(Equal("hll(client_uuid_hll)"))
+
+		qc.Query = &AQLQuery{
+			Table: "trips",
+			Measures: []Measure{
+				{Expr: "countDistinctHLL(client_uuid_hll)"},
 			},
 			TimeFilter: TimeFilter{
 				Column: "request_at",
@@ -2763,7 +2776,8 @@ var _ = ginkgo.Describe("AQL compiler", func() {
 		Ω(*qc.OOPK.geoIntersection).Should(
 			Equal(geoIntersection{shapeTableID: 2, shapeColumnID: 1, pointColumnID: 2,
 				shapeUUIDs: nil, shapeLatLongs: nullDevicePointer, shapeIndexs: nullDevicePointer, validShapeUUIDs: nil, dimIndex: -1, inOrOut: true}))
-		qc.processMeasureAndDimensions()
+		qc.processMeasure()
+		qc.processDimensions()
 		Ω(qc.Error).ShouldNot(BeNil())
 		Ω(qc.Error.Error()).Should(ContainSubstring("Geo table column is not allowed to be used in measure"))
 
@@ -2819,7 +2833,8 @@ var _ = ginkgo.Describe("AQL compiler", func() {
 		Ω(*qc.OOPK.geoIntersection).Should(
 			Equal(geoIntersection{shapeTableID: 2, shapeColumnID: 1, pointColumnID: 2,
 				shapeUUIDs: nil, shapeLatLongs: nullDevicePointer, shapeIndexs: nullDevicePointer, validShapeUUIDs: nil, dimIndex: -1, inOrOut: true}))
-		qc.processMeasureAndDimensions()
+		qc.processMeasure()
+		qc.processDimensions()
 		Ω(qc.Error).ShouldNot(BeNil())
 		Ω(qc.Error.Error()).Should(ContainSubstring("Only one geo dimension allowed"))
 
@@ -2848,7 +2863,7 @@ var _ = ginkgo.Describe("AQL compiler", func() {
 			},
 			Dimensions: []Dimension{
 				{
-					Expr: "g.shape",
+					Expr: "g.count",
 				},
 			},
 			Filters: []string{
@@ -2872,7 +2887,8 @@ var _ = ginkgo.Describe("AQL compiler", func() {
 		Ω(*qc.OOPK.geoIntersection).Should(
 			Equal(geoIntersection{shapeTableID: 2, shapeColumnID: 1, pointColumnID: 2,
 				shapeUUIDs: nil, shapeLatLongs: nullDevicePointer, shapeIndexs: nullDevicePointer, validShapeUUIDs: nil, dimIndex: -1, inOrOut: true}))
-		qc.processMeasureAndDimensions()
+		qc.processMeasure()
+		qc.processDimensions()
 		Ω(qc.Error).ShouldNot(BeNil())
 		Ω(qc.Error.Error()).Should(ContainSubstring("Only geo uuid is allowed in dimensions"))
 
@@ -2972,7 +2988,8 @@ var _ = ginkgo.Describe("AQL compiler", func() {
 		Ω(*qc.OOPK.geoIntersection).Should(
 			Equal(geoIntersection{shapeTableID: 2, shapeColumnID: 1, pointColumnID: 2,
 				shapeUUIDs: nil, shapeLatLongs: nullDevicePointer, shapeIndexs: nullDevicePointer, validShapeUUIDs: nil, dimIndex: -1, inOrOut: true}))
-		qc.processMeasureAndDimensions()
+		qc.processMeasure()
+		qc.processDimensions()
 		Ω(qc.Error).ShouldNot(BeNil())
 		Ω(qc.Error.Error()).Should(ContainSubstring("Only hex function is supported on UUID type, but got count"))
 
@@ -3027,7 +3044,8 @@ var _ = ginkgo.Describe("AQL compiler", func() {
 				shapeUUIDs: nil, shapeLatLongs: nullDevicePointer, shapeIndexs: nullDevicePointer, validShapeUUIDs: nil, dimIndex: -1, inOrOut: true}))
 		qc.processFilters()
 		Ω(qc.Error).Should(BeNil())
-		qc.processMeasureAndDimensions()
+		qc.processMeasure()
+		qc.processDimensions()
 		Ω(qc.Error).Should(BeNil())
 		Ω(qc.OOPK.geoIntersection.shapeUUIDs).Should(
 			Equal([]string{

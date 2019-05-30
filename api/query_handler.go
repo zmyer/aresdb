@@ -31,26 +31,27 @@ import (
 
 // QueryHandler handles query execution.
 type QueryHandler struct {
-	memStore     memstore.MemStore
-	deviceManger *query.DeviceManager
+	memStore      memstore.MemStore
+	deviceManager *query.DeviceManager
 }
 
 // NewQueryHandler creates a new QueryHandler.
 func NewQueryHandler(memStore memstore.MemStore, cfg common.QueryConfig) *QueryHandler {
 	return &QueryHandler{
-		memStore:     memStore,
-		deviceManger: query.NewDeviceManager(cfg),
+		memStore:      memStore,
+		deviceManager: query.NewDeviceManager(cfg),
 	}
 }
 
 // GetDeviceManager returns the device manager of query handler.
 func (handler *QueryHandler) GetDeviceManager() *query.DeviceManager {
-	return handler.deviceManger
+	return handler.deviceManager
 }
 
 // Register registers http handlers.
 func (handler *QueryHandler) Register(router *mux.Router, wrappers ...utils.HTTPHandlerWrapper) {
 	router.HandleFunc("/aql", utils.ApplyHTTPWrappers(handler.HandleAQL, wrappers)).Methods(http.MethodGet, http.MethodPost)
+	router.HandleFunc("/sql", utils.ApplyHTTPWrappers(handler.HandleSQL, wrappers)).Methods(http.MethodGet, http.MethodPost)
 }
 
 // HandleAQL swagger:route POST /query/aql queryAQL
@@ -70,6 +71,20 @@ func (handler *QueryHandler) Register(router *mux.Router, wrappers ...utils.HTTP
 func (handler *QueryHandler) HandleAQL(w http.ResponseWriter, r *http.Request) {
 	// default device to negative value to differentiate 0 from empty
 	aqlRequest := AQLRequest{Device: -1}
+
+	if err := ReadRequest(r, &aqlRequest); err != nil {
+		RespondWithBadRequest(w, err)
+		utils.GetLogger().With(
+			"error", err,
+			"statusCode", http.StatusBadRequest,
+		).Error("failed to parse query")
+		return
+	}
+
+	handler.handleAQLInternal(aqlRequest, w, r)
+}
+
+func (handler *QueryHandler) handleAQLInternal(aqlRequest AQLRequest, w http.ResponseWriter, r *http.Request) {
 	var err error
 	var duration time.Duration
 	var qcs []*query.AQLQueryContext
@@ -96,14 +111,7 @@ func (handler *QueryHandler) HandleAQL(w http.ResponseWriter, r *http.Request) {
 		} else {
 			l.Error("Some of the queries finished with error")
 		}
-
 	}()
-
-	if err = ReadRequest(r, &aqlRequest); err != nil {
-		statusCode = http.StatusBadRequest
-		RespondWithBadRequest(w, err)
-		return
-	}
 
 	if aqlRequest.Query != "" {
 		// Override from query parameter
@@ -128,79 +136,136 @@ func (handler *QueryHandler) HandleAQL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// -1 means no deviceChoosingTimeout setting from request.
-	deviceChoosingTimeout := -1
-	if aqlRequest.DeviceChoosingTimeout > 0 {
-		deviceChoosingTimeout = aqlRequest.DeviceChoosingTimeout
+	returnHLL := aqlRequest.Accept == ContentTypeHyperLogLog
+	if aqlRequest.DeviceChoosingTimeout <= 0 {
+		aqlRequest.DeviceChoosingTimeout = -1
 	}
 
-	returnHLL := r.Header.Get("Accept") == ContentTypeHyperLogLog
-
-	queryResponseWriter := getReponseWriter(returnHLL, len(aqlRequest.Body.Queries))
 	queryTimer := utils.GetRootReporter().GetTimer(utils.QueryLatency)
 	start := utils.Now()
-	for i, q := range aqlRequest.Body.Queries {
-		// Compile
-		qc := q.Compile(handler.memStore, returnHLL)
+	var requestResponseWriter QueryResponseWriter
+
+	if !returnHLL && canEagerFlush(aqlRequest.Body.Queries) {
+		aqlQuery := aqlRequest.Body.Queries[0]
+		qc := aqlQuery.Compile(handler.memStore, false)
+		qc.ResponseWriter = w
+		if qc.Error != nil {
+			err = qc.Error
+			statusCode = http.StatusBadRequest
+			w.WriteHeader(statusCode)
+			return
+		}
+		// for logging purpose only
 		qcs = append(qcs, qc)
 
-		for tableName := range qc.TableSchemaByName {
-			utils.GetRootReporter().GetChildCounter(map[string]string{
-				"table": tableName,
-			}, utils.QueryReceived).Inc(1)
-		}
-
-		if aqlRequest.Verbose > 0 {
-			queryResponseWriter.ReportQueryContext(qc)
-		}
-
-		if aqlRequest.Debug > 0 || aqlRequest.Profiling != "" {
-			qc.Debug = true
-		}
-		qc.Profiling = aqlRequest.Profiling
-
-		// Compilation error, should be bad request
+		qc.FindDeviceForQuery(handler.memStore, aqlRequest.Device, handler.deviceManager, aqlRequest.DeviceChoosingTimeout)
 		if qc.Error != nil {
-			queryResponseWriter.ReportError(i, q.Table, qc.Error, http.StatusBadRequest)
-			continue
+			err = qc.Error
+			statusCode = http.StatusServiceUnavailable
+			w.WriteHeader(statusCode)
+			return
 		}
+		defer handler.deviceManager.ReleaseReservedMemory(qc.Device, qc.Query)
 
-		// Find a device that meets the resource requirement of this query
-		// Use query specified device as hint
-		qc.FindDeviceForQuery(handler.memStore, aqlRequest.Device, handler.deviceManger, int(deviceChoosingTimeout))
-		// Unable to find a device for the query.
-		if qc.Error != nil {
-			// Unable to fulfill this request due to resource not available, clients need to try sometimes later.
-			queryResponseWriter.ReportError(i, q.Table, qc.Error, http.StatusServiceUnavailable)
-			continue
-		}
-		defer handler.deviceManger.ReleaseReservedMemory(qc.Device, qc.Query)
-		// Execute.
 		qc.ProcessQuery(handler.memStore)
 		if qc.Error != nil {
+			err = qc.Error
 			utils.GetQueryLogger().With(
-				"error", qc.Error,
-				"request", aqlRequest,
+				"error", err,
+				"query", aqlQuery,
 				"context", qc,
 			).Error("Error happened when processing query")
-			queryResponseWriter.ReportError(i, q.Table, qc.Error, http.StatusInternalServerError)
-		} else {
-			// Postprocess
-			utils.GetRootReporter().GetChildCounter(map[string]string{
-				"table": q.Table,
-			}, utils.QueryRowsReturned).Inc(int64(qc.OOPK.ResultSize))
+			statusCode = http.StatusInternalServerError
+			return
+		}
+		w.Write([]byte(`]}]`))
 
-			queryResponseWriter.ReportResult(i, qc)
-			qc.ReleaseHostResultsBuffers()
-			utils.GetRootReporter().GetChildCounter(map[string]string{
-				"table": q.Table,
-			}, utils.QuerySucceeded).Inc(1)
+		if aqlRequest.Verbose > 0 {
+			w.Write([]byte(`,"context":`))
+			qcBytes, _ := json.Marshal(qcs)
+			w.Write(qcBytes)
+		}
+
+		w.Write([]byte(`}`))
+	} else {
+		requestResponseWriter = getReponseWriter(returnHLL, len(aqlRequest.Body.Queries))
+
+		var qc *query.AQLQueryContext
+		for i, aqlQuery := range aqlRequest.Body.Queries {
+			qc, statusCode = handleQuery(handler.memStore, handler.deviceManager, aqlRequest, aqlQuery)
+			if aqlRequest.Verbose > 0 {
+				requestResponseWriter.ReportQueryContext(qc)
+			}
+			if qc.Error != nil {
+				requestResponseWriter.ReportError(i, aqlQuery.Table, qc.Error, statusCode)
+			} else {
+				requestResponseWriter.ReportResult(i, qc)
+				qc.ReleaseHostResultsBuffers()
+				utils.GetRootReporter().GetChildCounter(map[string]string{
+					"table": aqlQuery.Table,
+				}, utils.QuerySucceeded).Inc(1)
+			}
+
+			qcs = append(qcs, qc)
 		}
 	}
 	duration = utils.Now().Sub(start)
 	queryTimer.Record(duration)
-	queryResponseWriter.Respond(w)
-	statusCode = queryResponseWriter.GetStatusCode()
+	if requestResponseWriter != nil {
+		requestResponseWriter.Respond(w)
+		statusCode = requestResponseWriter.GetStatusCode()
+	}
+	return
+}
+
+func handleQuery(memStore memstore.MemStore, deviceManager *query.DeviceManager, aqlRequest AQLRequest, aqlQuery query.AQLQuery) (qc *query.AQLQueryContext, statusCode int) {
+	qc = aqlQuery.Compile(memStore, aqlRequest.Accept == ContentTypeHyperLogLog)
+
+	for tableName := range qc.TableSchemaByName {
+		utils.GetRootReporter().GetChildCounter(map[string]string{
+			"table": tableName,
+		}, utils.QueryReceived).Inc(1)
+	}
+
+	if aqlRequest.Debug > 0 || aqlRequest.Profiling != "" {
+		qc.Debug = true
+		aqlRequest.Verbose = 1
+
+	}
+	qc.Profiling = aqlRequest.Profiling
+
+	// Compilation error, should be bad request
+	if qc.Error != nil {
+		statusCode = http.StatusBadRequest
+		return
+	}
+
+	// Find a device that meets the resource requirement of this query
+	// Use query specified device as hint
+	qc.FindDeviceForQuery(memStore, aqlRequest.Device, deviceManager, aqlRequest.DeviceChoosingTimeout)
+	// Unable to find a device for the query.
+	if qc.Error != nil {
+		// Unable to fulfill this request due to resource not available, clients need to try sometimes later.
+		statusCode = http.StatusServiceUnavailable
+		return
+	}
+	defer deviceManager.ReleaseReservedMemory(qc.Device, qc.Query)
+	// Execute.
+	qc.ProcessQuery(memStore)
+	if qc.Error != nil {
+		utils.GetQueryLogger().With(
+			"error", qc.Error,
+			"query", aqlQuery,
+			"context", qc,
+		).Error("Error happened when processing query")
+		statusCode = http.StatusInternalServerError
+	} else {
+		// Report
+		utils.GetRootReporter().GetChildCounter(map[string]string{
+			"table": aqlQuery.Table,
+		}, utils.QueryRowsReturned).Inc(int64(qc.OOPK.ResultSize))
+	}
+	return
 }
 
 func getReponseWriter(returnHLL bool, nQueries int) QueryResponseWriter {
@@ -229,7 +294,7 @@ type JSONQueryResponseWriter struct {
 func NewJSONQueryResponseWriter(nQueries int) QueryResponseWriter {
 	return &JSONQueryResponseWriter{
 		response: query.AQLResponse{
-			Results: make([]queryCom.AQLTimeSeriesResult, nQueries),
+			Results: make([]queryCom.AQLQueryResult, nQueries),
 		},
 		statusCode: http.StatusOK,
 	}
@@ -257,7 +322,7 @@ func (w *JSONQueryResponseWriter) ReportQueryContext(qc *query.AQLQueryContext) 
 
 // ReportResult writes the query result to the response.
 func (w *JSONQueryResponseWriter) ReportResult(queryIndex int, qc *query.AQLQueryContext) {
-	qc.Results = qc.Postprocess()
+	qc.Postprocess()
 	if qc.Error != nil {
 		w.ReportError(queryIndex, qc.Query.Table, qc.Error, http.StatusInternalServerError)
 	}
@@ -317,4 +382,16 @@ func (w *HLLQueryResponseWriter) Respond(rw http.ResponseWriter) {
 // GetStatusCode returns the status code written into response.
 func (w *HLLQueryResponseWriter) GetStatusCode() int {
 	return w.statusCode
+}
+
+// for now we only eager flush when
+//    1. there's only 1 query in the request
+//    2. the query is non aggregate query
+func canEagerFlush(queries []query.AQLQuery) bool {
+	if len(queries) != 1 {
+		return false
+	}
+
+	aqlQuery := queries[0]
+	return len(aqlQuery.Measures) == 1 && aqlQuery.Measures[0].Expr == "1"
 }
